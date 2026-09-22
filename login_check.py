@@ -1,12 +1,12 @@
-from operator import iadd
-
-from login_dict import login_dict
 from logger import get_logger
 from pathlib import Path
 
 log = get_logger(__name__)
 
-def login_check(playwright):
+def login_check(playwright) -> dict[str,list]:
+    logged_list = []
+    unlogged_list = []
+    sum_dict = {}
     log.info("Запуск проверки номеров")
 
     profiles = Path("profiles")
@@ -22,11 +22,15 @@ def login_check(playwright):
         qr = page.locator('canvas[aria-label="Scan this QR code to link a device!"]')
         try:
             qr.wait_for(timeout=15000)
-            login_dict[profile] = False
+            unlogged_list.append(profile)
             log.warning("В аккаунт с номером %s НЕ вошли", profile)
         except Exception:
-            login_dict[profile] = True
+            logged_list.append(profile)
             log.info("В аккаунт с номером %s вошли", profile)
         context.close()
+        sum_dict["unlogged"] = unlogged_list
+        sum_dict['logged'] = logged_list
 
         log.info("Проверка номеров окончена")
+
+    return sum_dict
