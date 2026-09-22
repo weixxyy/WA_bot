@@ -1,0 +1,37 @@
+# ======================
+# Виртуальное окружение
+# ======================
+.venv/
+venv/
+
+# ==============
+# Python
+# ==============
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# ==================================
+# Профили браузера (Firefox)
+# ==================================
+# ВНИМАНИЕ: внутри cookies.sqlite / key4.db / storage лежит сессия
+# WhatsApp Web (wa_web_access_token, wa_ul) — это фактически доступ
+# к аккаунту, поэтому эти каталоги НИКОГДА не должны попадать в git.
+profiles/
+whatsapp_profile/
+
+# ======================
+# Логи и отладка бота
+# ======================
+logs/
+artifacts/
+test-results/
+
+# ==============
+# IDE
+# ==============
+.idea/workspace.xml
+.idea/shelf/
+.idea/httpRequests/
