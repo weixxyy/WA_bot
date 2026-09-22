@@ -1,1 +1,12 @@
-playwright
+# Зависимости бота WhatsApp (Playwright + Firefox).
+#
+# Установка окружения:
+#   python -m pip install -r requirements.txt
+#   python -m playwright install firefox        # без этого браузер не запустится
+#   # Linux, если не хватает системных библиотек:
+#   # python -m playwright install-deps firefox
+#
+# То же самое одной командой: ./setup.sh (Windows: setup.bat)
+#
+# Проверено на Python 3.14 / Playwright 1.63.0
+playwright==1.63.0
