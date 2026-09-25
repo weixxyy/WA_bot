@@ -1,5 +1,5 @@
 import time
-
+from pathlib import Path
 from logger import get_logger
 
 log = get_logger(__name__)
@@ -43,11 +43,15 @@ def do_script(urls_list, context):
                 role="button",
                 name='Вступить в группу'
             )
-            search2 = page.get_by_test_id(
+            search2 = page.get_by_test_id("confirm-popup").filter(has_text="Вы не можете вступить в данную группу, так как вы были удалены.")
+            search3 = page.get_by_test_id(
                 "conversation-info-header-chat-title"
             )
-            search.or_(search2).wait_for(timeout=None)
-            if search.is_visible():
+            search.or_(search2).or_(search3).wait_for(timeout=None)
+            if search2.is_visible():
+                log.info("Бот был удален из группы %s", group_name)
+                continue
+            elif search.is_visible():
                 log.info("Бот вступил в группу %s", group_name)
                 search.click()
             else:
