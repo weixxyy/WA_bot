@@ -27,7 +27,7 @@ def main():
                 headless=True,
             )
             log.info("Профиль %s: запускаем сценарий", profile)
-            script.do_script(urls_list=INVITE_URLS, context=context)
+            script.do_script(urls_list=INVITE_URLS, context=context, profile=profile)
 
             context.close()
         log.info("Бот завершил работу")

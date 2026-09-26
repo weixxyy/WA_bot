@@ -1,11 +1,49 @@
+import json
 import time
+from datetime import datetime
 from pathlib import Path
+
 from logger import get_logger
 
 log = get_logger(__name__)
 
+# Статистика по профилю лежит рядом с его Firefox-профилем.
+STATS_FILE_NAME = "bot_stats.json"
 
-def do_script(urls_list, context):
+
+def _stats_path(profile) -> Path:
+    """Путь к файлу статистики внутри каталога профиля."""
+    return Path(profile) / STATS_FILE_NAME
+
+
+def _save_stats(profile, stats) -> None:
+    """Пишет статистику профиля в bot_stats.json (UTF-8, читаемый JSON)."""
+    _stats_path(profile).write_text(
+        json.dumps(stats, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _reset_stats(profile) -> dict:
+    """Создаёт bot_stats.json, если его нет, и обнуляет счётчики.
+
+    Вызывается один раз перед работой бота с профилем. ``kicked_count`` —
+    сколько групп, из которых аккаунт был выгнан, встретилось за текущий
+    прогон; ``last_date_change`` — время последней записи в файл.
+    """
+    stats = {
+        "kicked_count": 0,
+        "last_date_change": datetime.now().isoformat(timespec="seconds"),
+    }
+    _save_stats(profile, stats)
+    log.info("Статистика профиля %s обнулена: %s", profile, stats)
+    return stats
+
+
+def do_script(urls_list, context, profile):
+        # Профиль нужен, чтобы вести статистику рядом с ним: context его не отдаёт.
+        stats = _reset_stats(profile)
+
         for invite_url in urls_list:
             page = context.new_page()
 
@@ -43,13 +81,25 @@ def do_script(urls_list, context):
                 role="button",
                 name='Вступить в группу'
             )
-            search2 = page.get_by_test_id("confirm-popup").filter(has_text="Вы не можете вступить в данную группу, так как вы были удалены.")
+            search2 = page.get_by_test_id("confirm-popup").filter(
+                visible=True,
+                has_text="Вы не можете вступить в данную группу, так как вы были удалены."
+            ).first
             search3 = page.get_by_test_id(
                 "conversation-info-header-chat-title"
             )
             search.or_(search2).or_(search3).wait_for(timeout=None)
             if search2.is_visible():
-                log.info("Бот был удален из группы %s", group_name)
+                stats["kicked_count"] += 1
+                stats["last_date_change"] = datetime.now().isoformat(
+                    timespec="seconds"
+                )
+                _save_stats(profile, stats)
+                log.info(
+                    "Бот был удален из группы %s (kicked_count=%s)",
+                    group_name,
+                    stats["kicked_count"],
+                )
                 continue
             elif search.is_visible():
                 log.info("Бот вступил в группу %s", group_name)
