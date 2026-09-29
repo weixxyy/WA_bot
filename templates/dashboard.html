@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Обзор — WA Bot{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <div><h1>Обзор</h1><p>Текущее состояние локальной рассылки.</p></div>
+  <form method="post" action="/run">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button class="primary" {{ 'disabled' if status.running else '' }}>Запустить сейчас</button>
+  </form>
+</div>
+<section class="stats" data-status-panel>
+  <article><span>Состояние</span><strong data-operation>{{ status.operation or 'Ожидание' }}</strong></article>
+  <article><span>Аккаунты</span><strong>{{ status.enabled_accounts }}</strong></article>
+  <article><span>Группы</span><strong>{{ status.enabled_groups }}</strong></article>
+  <article><span>Попытки</span><strong>{{ status.planned_attempts }} / {{ settings.max_attempts }}</strong></article>
+</section>
+<section class="card">
+  <h2>Расписание</h2>
+  {% if settings.schedule_enabled %}
+    <p>Включено · часовой пояс {{ status.timezone }}</p>
+    <p>Следующий запуск: <strong data-next-run>{{ status.next_run or 'вычисляется' }}</strong></p>
+  {% else %}
+    <p class="muted">Расписание выключено. Доступен ручной запуск.</p>
+  {% endif %}
+</section>
+<section class="card">
+  <div class="section-heading"><h2>Последние прогоны</h2><a href="/history">Вся история</a></div>
+  {% include "partials/run_table.html" %}
+</section>
+{% endblock %}

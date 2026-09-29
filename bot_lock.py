@@ -21,10 +21,10 @@
 """
 
 import os
-from contextlib import contextmanager
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from datetime import datetime
 from pathlib import Path
-from typing import Iterator
 
 try:  # POSIX
     import fcntl
@@ -36,12 +36,10 @@ try:  # Windows
 except ImportError:  # pragma: no cover - только POSIX
     msvcrt = None
 
-from logger import LOG_DIR, get_logger
+from logger import get_logger
+from paths import LOCK_FILE
 
 log = get_logger(__name__)
-
-# Лок держим рядом с логами: каталог logs/ уже в .gitignore.
-LOCK_FILE = Path(LOG_DIR) / "wa_bot.lock"
 
 TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
@@ -81,10 +79,8 @@ def _unlock(descriptor: int) -> None:
 
     if msvcrt is not None:
         os.lseek(descriptor, 0, os.SEEK_SET)
-        try:
+        with suppress(OSError):  # pragma: no cover - снимать уже нечего
             msvcrt.locking(descriptor, msvcrt.LK_UNLCK, LOCK_BYTES)
-        except OSError:  # pragma: no cover - снимать уже нечего
-            pass
 
 
 def _open_lock_file(lock_file) -> int:

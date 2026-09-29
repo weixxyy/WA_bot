@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Аккаунты — WA Bot{% endblock %}
+{% block content %}
+<div class="page-heading"><div><h1>WhatsApp-аккаунты</h1><p>До 10 аккаунтов-отправителей. Одновременно выполняется одна операция.</p></div></div>
+<section class="card">
+  <h2>Добавить аккаунт</h2>
+  <form method="post" action="/accounts" class="form-grid">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Имя<input name="name" placeholder="Основной" required></label>
+    <label>Телефон, необязательно<input name="phone" placeholder="+7…"></label>
+    <button class="primary" {{ 'disabled' if status.running else '' }}>Открыть QR-вход</button>
+  </form>
+</section>
+<section class="stack">
+  {% for account in accounts %}
+  <article class="card account-card">
+    <form method="post" action="/accounts/{{ account.id }}" class="form-grid grow">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>Имя<input name="name" value="{{ account.name }}" required></label>
+      <label>Телефон<input name="phone" value="{{ account.phone or '' }}"></label>
+      <label class="switch compact"><input type="checkbox" name="enabled" {{ 'checked' if account.enabled else '' }}> Включён</label>
+      <button>Сохранить</button>
+    </form>
+    <div class="account-status"><span class="badge {{ account.status }}">{{ account.status }}</span><small>{{ account.status_detail or account.status_checked_at or 'Ещё не проверялся' }}</small></div>
+    <div class="actions">
+      <form method="post" action="/accounts/{{ account.id }}/check"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button {{ 'disabled' if status.running else '' }}>Проверить</button></form>
+      <form method="post" action="/accounts/{{ account.id }}/authorize"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button {{ 'disabled' if status.running else '' }}>Войти заново</button></form>
+      <form method="post" action="/accounts/{{ account.id }}/delete" data-confirm="Необратимо удалить аккаунт и его WhatsApp-сессию?"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="danger" {{ 'disabled' if status.running else '' }}>Удалить</button></form>
+    </div>
+  </article>
+  {% else %}<section class="empty">Аккаунтов пока нет. Добавьте первый и отсканируйте QR-код.</section>{% endfor %}
+</section>
+{% endblock %}
