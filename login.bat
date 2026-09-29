@@ -1,10 +1,17 @@
 @echo off
 chcp 65001 >nul
-rem Добавление аккаунтов WhatsApp (Windows).
+rem Управление аккаунтами WhatsApp (Windows).
 rem
-rem Скрипт спрашивает, сколько аккаунтов добавить и как назвать их профили,
-rem затем по очереди открывает Firefox на web.whatsapp.com — нужно отсканировать
-rem QR-код телефоном и нажать Enter в консоли.
+rem По умолчанию скрипт показывает меню: добавить аккаунты (спрашивает, сколько
+rem и как назвать профили, затем по очереди открывает Firefox на
+rem web.whatsapp.com — нужно отсканировать QR-код телефоном и нажать Enter)
+rem или удалить профиль.
+rem
+rem Аргументы пробрасываются в login.py:
+rem   login.bat                        интерактивное меню
+rem   login.bat --list                 показать профили из profiles/
+rem   login.bat --delete 7             удалить профиль profiles\7 (с подтверждением)
+rem   login.bat --delete 7 8 --yes     без подтверждения
 rem
 rem Запуск: двойной клик или login.bat в командной строке из каталога проекта.
 
@@ -20,7 +27,7 @@ if not exist "%VENV_PY%" (
     exit /b 1
 )
 
-"%VENV_PY%" login.py
+"%VENV_PY%" login.py %*
 
 pause
 exit /b 0
