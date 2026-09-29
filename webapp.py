@@ -258,6 +258,18 @@ def create_app(database=None, service=None) -> FastAPI:
             return redirect("/accounts", error=str(error))
         return redirect("/accounts", message="Открыто окно авторизации")
 
+    @app.post("/accounts/{account_id}/confirm-authorized")
+    async def confirm_account_authorized(request: Request, account_id: int):
+        await checked_form(request)
+        try:
+            service.confirm_account_authorized(account_id)
+        except (ConfigurationError, ServiceBusyError) as error:
+            return redirect("/accounts", error=str(error))
+        return redirect(
+            "/accounts",
+            message="Вход подтверждён; окно авторизации закрыто",
+        )
+
     @app.post("/accounts/{account_id}/check")
     async def check_account(request: Request, account_id: int):
         await checked_form(request)

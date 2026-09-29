@@ -13,6 +13,7 @@ from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
 from tzlocal import get_localzone, reload_localzone
 
+import script
 from automation import authorize_profile, inspect_profile, send_to_group
 from database import Database, utc_now
 from domain import next_schedule_at, schedule_slot_key
@@ -39,6 +40,7 @@ class BotService:
         self._operation: str | None = None
         self._operation_thread: threading.Thread | None = None
         self._scheduler_thread: threading.Thread | None = None
+        self._authorization_confirmations: dict[int, threading.Event] = {}
 
     def start(self) -> None:
         self.database.prune_history(30)
@@ -111,11 +113,42 @@ class BotService:
         account = self.database.get_account(account_id)
         if not account:
             raise ConfigurationError("Аккаунт не найден")
+        confirmation = threading.Event()
         self._begin_operation(
             f"Авторизация: {account['name']}",
             self._authorize_worker,
             account,
+            confirmation,
+            authorization=(account_id, confirmation),
         )
+
+    def confirm_account_authorized(self, account_id: int) -> None:
+        account = self.database.get_account(account_id)
+        if not account:
+            raise ConfigurationError("Аккаунт не найден")
+        with self._state_lock:
+            confirmation = self._authorization_confirmations.get(account_id)
+            thread = self._operation_thread
+        if confirmation is None:
+            if account["status"] == "authorized":
+                return
+            raise ConfigurationError("Для этого аккаунта окно авторизации не открыто")
+
+        log.info("Оператор подтвердил вход аккаунта %s", account["name"])
+        confirmation.set()
+        self.database.update_account(
+            account_id,
+            status="authorized",
+            status_detail="Вход подтверждён оператором",
+            status_checked_at=utc_now(),
+        )
+        if thread and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=10)
+            if thread.is_alive():
+                log.warning(
+                    "Окно авторизации аккаунта %s ещё закрывается",
+                    account["name"],
+                )
 
     def check_account(self, account_id: int) -> None:
         account = self.database.get_account(account_id)
@@ -182,11 +215,19 @@ class BotService:
             thread.start()
             return run_id
 
-    def _begin_operation(self, label, target, *args) -> None:
+    def _begin_operation(self, label, target, *args, authorization=None) -> None:
         with self._state_lock:
             if self._operation:
                 raise ServiceBusyError("Другая операция уже выполняется")
             self._operation = label
+            if authorization is not None:
+                account_id, confirmation = authorization
+                self._authorization_confirmations[account_id] = confirmation
+                self.database.update_account(
+                    account_id,
+                    status="authorizing",
+                    status_detail="После входа нажмите кнопку подтверждения в панели",
+                )
             thread = threading.Thread(
                 target=target,
                 args=args,
@@ -201,14 +242,14 @@ class BotService:
             self._operation = None
             self._operation_thread = None
 
-    def _authorize_worker(self, account: dict) -> None:
-        self.database.update_account(
-            account["id"], status="authorizing", status_detail=None
-        )
+    def _authorize_worker(self, account: dict, confirmation: threading.Event) -> None:
         try:
             with sync_playwright() as playwright:
                 status, detail = authorize_profile(
-                    playwright, Path(account["profile_path"]), self.stop_event
+                    playwright,
+                    Path(account["profile_path"]),
+                    self.stop_event,
+                    confirmation,
                 )
             self.database.update_account(
                 account["id"],
@@ -225,6 +266,8 @@ class BotService:
                 status_checked_at=utc_now(),
             )
         finally:
+            with self._state_lock:
+                self._authorization_confirmations.pop(account["id"], None)
             self._finish_operation()
 
     def _check_worker(self, account: dict) -> None:
@@ -255,6 +298,7 @@ class BotService:
 
     def _run_worker(self, run_id, accounts, groups, settings, images) -> None:
         final_status = "completed"
+        run_stats = {}
         try:
             image_paths = [Path(item["stored_path"]) for item in images]
             with sync_playwright() as playwright:
@@ -273,9 +317,13 @@ class BotService:
                             account["id"], status="error", status_detail=str(error)
                         )
                         self._record_account_failure(run_id, account, groups, str(error))
+                        run_stats[account["name"]] = None
                         continue
 
+                    profile = Path(account["profile_path"])
                     try:
+                        profile_stats = script.start_profile_run(profile)
+                        log.info("Профиль %s: запускаем сценарий", account["name"])
                         for group in groups:
                             if self.stop_event.is_set():
                                 final_status = "cancelled"
@@ -287,6 +335,7 @@ class BotService:
                                 context,
                                 settings,
                                 image_paths,
+                                profile_stats,
                             )
                             if self.stop_event.wait(
                                 random.uniform(
@@ -297,6 +346,7 @@ class BotService:
                                 final_status = "cancelled"
                                 break
                     finally:
+                        run_stats[account["name"]] = script.log_stats(profile)
                         try:
                             context.close()
                         except PlaywrightError:
@@ -305,10 +355,29 @@ class BotService:
             final_status = "failed"
             log.exception("Прогон #%s завершился необработанной ошибкой", run_id)
         finally:
+            if run_stats:
+                summary = script.save_run_summary(run_stats)
+                log.info(
+                    "Сводка прогона #%s: выгнан из %s групп(ы) суммарно по %s "
+                    "профилям (файл %s)",
+                    run_id,
+                    summary["total_kicked"],
+                    len(run_stats),
+                    script.SUMMARY_FILE,
+                )
             self.database.finish_run(run_id, final_status)
             self._finish_operation()
 
-    def _run_attempt(self, run_id, account, group, context, settings, image_paths):
+    def _run_attempt(
+        self,
+        run_id,
+        account,
+        group,
+        context,
+        settings,
+        image_paths,
+        profile_stats,
+    ):
         attempt_id = self.database.add_attempt(run_id, account, group)
         outcome = send_to_group(
             context,
@@ -341,6 +410,20 @@ class BotService:
                 status_detail=outcome.detail,
                 status_checked_at=utc_now(),
             )
+        if outcome.status == "kicked":
+            script.record_kicked(
+                account["profile_path"],
+                profile_stats,
+                outcome.group_name or group.get("name"),
+            )
+        elif outcome.status != "sent":
+            log.warning(
+                "Группа %s пропущена (%s): %s",
+                outcome.group_name or group.get("name") or group["id"],
+                outcome.status,
+                outcome.detail or "без подробностей",
+            )
+        return outcome
 
     def _record_account_failure(self, run_id, account, groups, error):
         for group in groups:

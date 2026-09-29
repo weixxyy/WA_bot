@@ -1,5 +1,8 @@
 import pytest
 
+import script
+import service as service_module
+from automation import AttemptOutcome
 from database import Database
 from service import BotService, ConfigurationError
 
@@ -49,3 +52,59 @@ def test_account_limit_is_enforced(tmp_path, monkeypatch):
 
     with pytest.raises(ConfigurationError, match="не больше 10"):
         service.create_account("Лишний")
+
+
+class _RunContext:
+    def close(self):
+        pass
+
+
+class _RunFirefox:
+    def launch_persistent_context(self, **_kwargs):
+        return _RunContext()
+
+
+class _RunPlaywright:
+    firefox = _RunFirefox()
+
+
+class _RunPlaywrightManager:
+    def __enter__(self):
+        return _RunPlaywright()
+
+    def __exit__(self, *_args):
+        pass
+
+
+def test_run_worker_preserves_per_profile_kicked_statistics(tmp_path, monkeypatch):
+    database, service = configured_service(tmp_path)
+    monkeypatch.setattr(script, "SUMMARY_FILE", tmp_path / "stats_summary.json")
+    database.set_settings({"delay_min": 0, "delay_max": 0})
+    account = database.list_accounts()[0]
+    groups, _ = database.list_groups(page_size=10)
+    run_id = database.create_run("manual", "running", len(groups))
+    outcomes = iter(
+        [
+            AttemptOutcome("kicked", "Первая группа"),
+            AttemptOutcome("sent", "Вторая группа"),
+        ]
+    )
+    messages = []
+    monkeypatch.setattr(service_module, "sync_playwright", _RunPlaywrightManager)
+    monkeypatch.setattr(service_module, "send_to_group", lambda *_args: next(outcomes))
+    monkeypatch.setattr(
+        script.log,
+        "info",
+        lambda message, *args: messages.append(message % args),
+    )
+
+    service._run_worker(
+        run_id,
+        [account],
+        groups,
+        database.get_settings(),
+        [],
+    )
+
+    assert script.read_stats(account["profile_path"])["kicked_count"] == 1
+    assert any("Итог по профилю" in message for message in messages)
