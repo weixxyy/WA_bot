@@ -18,7 +18,8 @@
 """
 
 import time
-from datetime import datetime, time as dt_time, timedelta
+from datetime import datetime, timedelta
+from datetime import time as dt_time
 
 from logger import get_logger
 

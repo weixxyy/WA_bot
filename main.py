@@ -1,163 +1,124 @@
+"""Entry point for the local WA Bot web application."""
+
 import argparse
+import json
+import socket
+import threading
+import time
+import webbrowser
 
-import script
-from playwright.sync_api import sync_playwright
+import uvicorn
 
-from bot_lock import LOCK_FILE, owner_description, run_lock
-from urls_list import INVITE_URLS
-from login_check import ensure_profiles_dir, login_check
+from bot_lock import owner_description, run_lock
+from database import Database
 from logger import get_logger, setup_logging
-from scheduler import DEFAULT_RUN_AT, parse_run_at, run_forever
+from migration import migrate_legacy_data
+from paths import RUNTIME_FILE, ensure_data_dirs
+from service import BotService, ConfigurationError
+from webapp import create_app
 
 log = get_logger(__name__)
-
-
-def run_once() -> dict:
-    """Один полный прогон бота: проверка профилей и сценарий по каждой группе.
-
-    :return: результат :func:`login_check` со списками ``logged``/``unlogged``.
-    """
-    # У человека, только что скачавшего проект, каталога profiles/ ещё нет.
-    profiles_dir = ensure_profiles_dir()
-    log.info("Каталог профилей: %s", profiles_dir)
-    # имя профиля -> сколько групп, из которых его выгнали за этот прогон
-    # (None, если статистику профиля прочитать не удалось).
-    run_stats = {}
-    with sync_playwright() as pw:
-        login_dict = login_check(pw)
-        if not login_dict['logged']:
-            log.warning(
-                "В %s нет ни одного авторизованного профиля.\n"
-                "Положите в него каталог с уже выполненным входом в WhatsApp Web "
-                "и запустите бота снова.",
-                profiles_dir,
-            )
-        for profile in login_dict['logged']:
-            context = pw.firefox.launch_persistent_context(
-                user_data_dir=profile,
-                headless=True,
-            )
-            try:
-                log.info("Профиль %s: запускаем сценарий", profile)
-                script.do_script(
-                    urls_list=INVITE_URLS, context=context, profile=profile
-                )
-            except Exception:
-                # Сбой на одном профиле не должен прерывать обход остальных.
-                log.exception("Профиль %s: сценарий прерван ошибкой", profile)
-            finally:
-                # Итог печатаем и при ошибке: bot_stats.json уже на диске.
-                run_stats[profile.name] = script.log_stats(profile)
-                context.close()
-
-    if run_stats:
-        summary = script.save_run_summary(run_stats)
-        log.info(
-            "Сводка прогона: выгнан из %s групп(ы) суммарно по %s профилям "
-            "(файл %s)",
-            summary["total_kicked"],
-            len(run_stats),
-            script.SUMMARY_FILE,
-        )
-
-    if login_dict['unlogged']:
-        log.info('В списке номеров есть незарегестрированные аккаунты\n'
-                 'Запустить регистрацию?\n'
-                 '1 - да 2 - нет')
-    # на этом этапе пока что выкатим код, продолжим когда подключим к базам
-    return login_dict
+DEFAULT_PORT = 8765
 
 
 def parse_args(argv=None):
-    """Разбирает аргументы командной строки.
-
-    ``--once`` — один прогон и выход, ``--at ЧЧ:ММ ...`` — свои времена запусков
-    вместо :data:`scheduler.DEFAULT_RUN_AT`.
-    """
-    parser = argparse.ArgumentParser(
-        description="Бот WhatsApp: заходит по invite-ссылкам и отправляет ping.",
-    )
-    parser.add_argument(
-        "--once",
-        action="store_true",
-        help="выполнить один прогон и выйти (без расписания)",
-    )
-    parser.add_argument(
-        "--at",
-        nargs="+",
-        metavar="ЧЧ:ММ",
-        default=None,
-        help=(
-            "времена запусков в местном времени, например: --at 09:00 18:00 "
-            f"(по умолчанию {' '.join(DEFAULT_RUN_AT)})"
-        ),
-    )
-    parser.add_argument(
-        "--force",
-        action="store_true",
-        help=(
-            "запустить, даже если бот уже работает "
-            "(второй экземпляр без этого флага не стартует)"
-        ),
-    )
-    args = parser.parse_args(argv)
-
-    if args.once and args.at:
-        parser.error("--once и --at несовместимы: --once отключает расписание")
-    if args.at:
-        # Проверяем формат сразу: опечатка в --at не должна ждать первого слота.
-        try:
-            args.at = parse_run_at(args.at)
-        except ValueError as error:
-            parser.error(str(error))
-    return args
+    parser = argparse.ArgumentParser(description="Локальная панель WA Bot")
+    parser.add_argument("--once", action="store_true", help="выполнить один прогон")
+    parser.add_argument("--no-browser", action="store_true", help="не открывать панель")
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="порт панели")
+    return parser.parse_args(argv)
 
 
-def run_bot(args) -> None:
-    """Выполняет режим из аргументов: один прогон либо работу по расписанию."""
-    if args.once:
-        log.info("Режим: один прогон")
-        run_once()
-        log.info("Бот завершил работу")
-        return
-
-    log.info("Режим: по расписанию")
-    run_forever(run_once, args.at or DEFAULT_RUN_AT)
-
-
-def main(argv=None):
-    """Точка входа.
-
-    Без флагов бот работает по расписанию (:data:`scheduler.DEFAULT_RUN_AT`),
-    ``--once`` выполняет один прогон и завершает работу. Пока бот работает, он
-    держит блокировку :data:`bot_lock.LOCK_FILE`, поэтому второй экземпляр без
-    ``--force`` не стартует: два прогона по одним профилям ломают Firefox-профиль.
-    """
-    setup_logging()
+def main(argv=None) -> int:
     args = parse_args(argv)
-    log.info("Запуск бота")
-
-    if args.force:
-        log.warning("--force: блокировку %s не проверяю", LOCK_FILE)
-        run_bot(args)
-        return
+    ensure_data_dirs()
+    setup_logging()
 
     with run_lock() as acquired:
         if not acquired:
-            owner = owner_description()
-            log.error(
-                "Бот уже запущен%s. Второй экземпляр не стартует: два прогона по "
-                "одним профилям ломают Firefox-профиль. Остановите работающий бот "
-                "(Ctrl+C) и повторите либо запустите с --force.",
-                f" ({owner})" if owner else "",
-            )
-            raise SystemExit(1)
-        run_bot(args)
+            url = _running_url()
+            log.info("WA Bot уже работает%s", _owner_suffix())
+            if not args.no_browser:
+                webbrowser.open(url)
+            print(f"Панель уже запущена: {url}")
+            return 0
+
+        database = Database()
+        database.initialize()
+        migrate_legacy_data(database)
+        if args.once:
+            return _run_once(database)
+        return _serve(database, args.port, args.no_browser)
+
+
+def _serve(database: Database, requested_port: int, no_browser: bool) -> int:
+    port = _available_port(requested_port)
+    url = f"http://127.0.0.1:{port}"
+    _write_runtime(port)
+    try:
+        if not no_browser:
+            threading.Timer(1.0, webbrowser.open, args=(url,)).start()
+        print(f"WA Bot запущен: {url}")
+        print("Закройте эту вкладку терминала или нажмите Ctrl+C для остановки.")
+        uvicorn.run(
+            create_app(database=database),
+            host="127.0.0.1",
+            port=port,
+            log_level="warning",
+        )
+        return 0
+    finally:
+        RUNTIME_FILE.unlink(missing_ok=True)
+
+
+def _run_once(database: Database) -> int:
+    service = BotService(database)
+    try:
+        run_id = service.start_run("manual")
+    except ConfigurationError as error:
+        log.error("Прогон не запущен: %s", error)
+        return 1
+    print(f"Запущен прогон #{run_id}")
+    try:
+        while service.status()["running"]:
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        service.stop()
+        return 130
+    run, _ = database.get_run(run_id)
+    return 0 if run and run["status"] == "completed" else 1
+
+
+def _available_port(start: int) -> int:
+    for port in range(start, start + 20):
+        with socket.socket() as candidate:
+            try:
+                candidate.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+            return port
+    raise RuntimeError("Не найден свободный локальный порт для веб-панели")
+
+
+def _write_runtime(port: int) -> None:
+    payload = json.dumps({"port": port}, ensure_ascii=False)
+    temporary = RUNTIME_FILE.with_suffix(".tmp")
+    temporary.write_text(payload, encoding="utf-8")
+    temporary.replace(RUNTIME_FILE)
+
+
+def _running_url() -> str:
+    try:
+        data = json.loads(RUNTIME_FILE.read_text(encoding="utf-8"))
+        return f"http://127.0.0.1:{int(data['port'])}"
+    except (OSError, ValueError, KeyError, json.JSONDecodeError):
+        return f"http://127.0.0.1:{DEFAULT_PORT}"
+
+
+def _owner_suffix() -> str:
+    owner = owner_description()
+    return f" ({owner})" if owner else ""
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except (KeyboardInterrupt, EOFError):
-        # Остановить планировщик можно через Ctrl+C — это штатный выход.
-        log.info("Бот остановлен пользователем")
+    raise SystemExit(main())

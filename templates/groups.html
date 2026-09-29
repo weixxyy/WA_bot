@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Группы — WA Bot{% endblock %}
+{% block content %}
+<div class="page-heading"><div><h1>Группы назначения</h1><p>{{ total }} групп. Вставьте произвольный текст — ссылки будут найдены автоматически.</p></div></div>
+<section class="card">
+  <form method="post" action="/groups/import" enctype="multipart/form-data" class="stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Ссылки или текст<textarea name="links" rows="7" placeholder="https://chat.whatsapp.com/…"></textarea></label>
+    <label>Или файл .txt<input type="file" name="file" accept="text/plain,.txt"></label>
+    <button class="primary">Найти и добавить ссылки</button>
+  </form>
+</section>
+<section class="card">
+  <form method="get" class="inline-form"><input name="q" value="{{ q }}" placeholder="Поиск по имени или ссылке"><button>Найти</button></form>
+  <form method="post" action="/groups/bulk" class="stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="bulk"><select name="action"><option value="enable">Включить</option><option value="disable">Отключить</option><option value="delete">Удалить</option></select><button>Применить к выбранным</button></div>
+    <div class="table-wrap"><table><thead><tr><th><input type="checkbox" data-check-all></th><th>Группа</th><th>Состояние</th><th></th></tr></thead><tbody>
+      {% for group in groups %}<tr>
+        <td><input type="checkbox" name="group_ids" value="{{ group.id }}"></td>
+        <td><input form="group-{{ group.id }}" name="name" value="{{ group.name or '' }}" placeholder="Название определится позже"><small class="mono">{{ group.invite_url }}</small></td>
+        <td><label class="choice"><input form="group-{{ group.id }}" type="checkbox" name="enabled" {{ 'checked' if group.enabled else '' }}> включена</label><small>{{ group.last_status or 'не проверялась' }}</small></td>
+        <td><button form="group-{{ group.id }}">Сохранить</button></td>
+      </tr>{% else %}<tr><td colspan="4" class="muted">Групп пока нет.</td></tr>{% endfor %}
+    </tbody></table></div>
+  </form>
+  {% for group in groups %}<form id="group-{{ group.id }}" method="post" action="/groups/{{ group.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"></form>{% endfor %}
+  <div class="pagination">{% if page > 1 %}<a href="?q={{ q }}&page={{ page - 1 }}">← Назад</a>{% endif %}<span>{{ page }} / {{ pages }}</span>{% if page < pages %}<a href="?q={{ q }}&page={{ page + 1 }}">Вперёд →</a>{% endif %}</div>
+</section>
+{% endblock %}
