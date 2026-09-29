@@ -1,7 +1,7 @@
 from login_check import check_profile
 
 
-def test_profile_requires_positive_authorized_marker(monkeypatch, tmp_path):
+def test_profile_maps_inspection_error_to_unknown(monkeypatch, tmp_path):
     monkeypatch.setattr(
         "login_check.inspect_profile",
         lambda playwright, profile: ("error", "selector changed"),

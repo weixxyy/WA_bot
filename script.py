@@ -62,6 +62,23 @@ def _reset_stats(profile) -> dict:
     return stats
 
 
+def start_profile_run(profile) -> dict:
+    """Start the original per-profile statistics from the web wrapper."""
+    return _reset_stats(profile)
+
+
+def record_kicked(profile, stats: dict, group_name: str | None) -> None:
+    """Apply the original kicked-group counter and log message."""
+    stats["kicked_count"] += 1
+    stats["last_date_change"] = datetime.now().isoformat(timespec="seconds")
+    _save_stats(profile, stats)
+    log.info(
+        "Бот был удален из группы %s (kicked_count=%s)",
+        group_name or "не определено",
+        stats["kicked_count"],
+    )
+
+
 def read_stats(profile) -> dict | None:
     """Читает статистику профиля из ``bot_stats.json``.
 
@@ -166,9 +183,7 @@ def do_script(urls_list, context, profile):
             stop_event,
         )
         if outcome.status == "kicked":
-            stats["kicked_count"] += 1
-            stats["last_date_change"] = datetime.now().isoformat(timespec="seconds")
-            _save_stats(profile, stats)
+            record_kicked(profile, stats, outcome.group_name)
         elif outcome.status != "sent":
             log.warning(
                 "Группа пропущена (%s): %s",
