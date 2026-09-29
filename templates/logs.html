@@ -1,0 +1,3 @@
+{% extends "base.html" %}
+{% block title %}Журнал — WA Bot{% endblock %}
+{% block content %}<div class="page-heading"><div><h1>Диагностический журнал</h1><p>Последние 500 строк.</p></div><a href="/logs">Обновить</a></div><pre class="log">{{ log_text }}</pre>{% endblock %}

@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Account management now lives in the local web panel.
 set -euo pipefail
 cd "$(dirname "$0")"
 exec ./start.sh "$@"

@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Прогон #{{ run.id }} — WA Bot{% endblock %}
+{% block content %}
+<div class="page-heading"><div><h1>Прогон #{{ run.id }}</h1><p>{{ run.started_at }} · {{ run.trigger }}</p></div><a href="/history">← История</a></div>
+<section class="stats"><article><span>Состояние</span><strong>{{ run.status }}</strong></article><article><span>Прогресс</span><strong>{{ run.completed_attempts }} / {{ run.planned_attempts }}</strong></article><article><span>Отправлено</span><strong>{{ run.sent_count }}</strong></article><article><span>Ошибки</span><strong>{{ run.error_count }}</strong></article></section>
+<section class="card"><div class="table-wrap"><table><thead><tr><th>Аккаунт</th><th>Группа</th><th>Результат</th><th>Описание</th></tr></thead><tbody>
+{% for item in attempts %}<tr><td>{{ item.account_name }}</td><td>{{ item.group_label }}</td><td><span class="badge {{ item.status }}">{{ item.status }}</span></td><td>{{ item.error or '' }}</td></tr>{% else %}<tr><td colspan="4" class="muted">Попыток пока нет.</td></tr>{% endfor %}
+</tbody></table></div></section>
+{% endblock %}
