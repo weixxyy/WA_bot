@@ -15,17 +15,15 @@
 
 import argparse
 import os
-import re
 import shutil
 import stat
-from contextlib import nullcontext
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-from bot_lock import owner_description, run_lock
-from logger import get_logger, setup_logging
+from bot_lock import is_locked, owner_description
 from login_check import ensure_profiles_dir
+from logger import get_logger, setup_logging
 
 log = get_logger(__name__)
 
@@ -39,14 +37,6 @@ ACTION_EXIT = "0"
 
 # Ответы, которые считаем подтверждением удаления.
 YES_ANSWERS = {"y", "yes", "д", "да"}
-WINDOWS_RESERVED_NAMES = {
-    "CON",
-    "PRN",
-    "AUX",
-    "NUL",
-    *(f"COM{number}" for number in range(1, 10)),
-    *(f"LPT{number}" for number in range(1, 10)),
-}
 
 
 def ask_count() -> int:
@@ -74,9 +64,9 @@ def is_valid_name(name: str) -> bool:
     if name in {".", "..", ".gitkeep"}:
         return False
     # Имя каталога не должно содержать разделителей пути.
-    if re.search(r'[<>:"/\\|?*]', name) or name.endswith((" ", ".")):
+    if "/" in name or "\\" in name:
         return False
-    return name.split(".", 1)[0].upper() not in WINDOWS_RESERVED_NAMES
+    return True
 
 
 def ask_name(number: int, profiles_dir, taken: list) -> str:
@@ -88,7 +78,7 @@ def ask_name(number: int, profiles_dir, taken: list) -> str:
     while True:
         name = input(f"Название (номер) профиля №{number}: ").strip()
         if not is_valid_name(name):
-            print("Недопустимое или зарезервированное имя профиля.")
+            print("Недопустимое название: пусто или содержит / \\.")
             continue
         if name in taken:
             print(f"Профиль {name} уже добавлен в этом запуске, введите другой номер.")
@@ -315,6 +305,18 @@ def delete_accounts(profiles_dir) -> None:
     if not profiles:
         return
 
+    if is_locked():
+        # Профиль может быть открыт в работающем Firefox: сначала останавливаем бота.
+        owner = owner_description()
+        who = f" ({owner})" if owner else ""
+        log.warning("Бот сейчас работает%s: удаление отменено", who)
+        print(
+            f"Бот сейчас работает{who}. Остановите его (Ctrl+C) и повторите: иначе "
+            "прогон может сломаться на середине, а на Windows каталог профиля "
+            "вообще не удалится."
+        )
+        return
+
     chosen = ask_profiles_to_delete(profiles)
     if not chosen or not confirm_delete(chosen):
         print("Удаление отменено.")
@@ -331,6 +333,15 @@ def delete_named(names, assume_yes=False, force=False) -> None:
     :param force: удалять, даже если бот сейчас работает (``--force``).
     """
     profiles_dir = ensure_profiles_dir()
+
+    if is_locked() and not force:
+        owner = owner_description()
+        who = f" ({owner})" if owner else ""
+        log.error(
+            "Бот сейчас работает%s: удаление отменено (--force обойдёт проверку)",
+            who,
+        )
+        raise SystemExit(1)
 
     profiles = []
     for name in names:
@@ -397,29 +408,21 @@ def main(argv=None):
         show_profiles(list_profiles(ensure_profiles_dir()))
         return
 
-    lock_context = nullcontext(True) if args.force else run_lock()
-    with lock_context as acquired:
-        if not acquired:
-            owner = owner_description()
-            who = f" ({owner})" if owner else ""
-            log.error("Бот сейчас работает%s: управление аккаунтами недоступно", who)
-            raise SystemExit(1)
+    if args.delete:
+        delete_named(args.delete, assume_yes=args.yes, force=args.force)
+        return
 
-        if args.delete:
-            delete_named(args.delete, assume_yes=args.yes, force=args.force)
-            return
+    # У человека, только что скачавшего проект, каталога profiles/ ещё нет.
+    profiles_dir = ensure_profiles_dir()
+    log.info("Каталог профилей: %s", profiles_dir)
 
-        # У человека, только что скачавшего проект, каталога profiles/ ещё нет.
-        profiles_dir = ensure_profiles_dir()
-        log.info("Каталог профилей: %s", profiles_dir)
-
-        action = ask_action()
-        if action == ACTION_EXIT:
-            return
-        if action == ACTION_DELETE:
-            delete_accounts(profiles_dir)
-            return
-        add_accounts(profiles_dir)
+    action = ask_action()
+    if action == ACTION_EXIT:
+        return
+    if action == ACTION_DELETE:
+        delete_accounts(profiles_dir)
+        return
+    add_accounts(profiles_dir)
 
 
 if __name__ == "__main__":

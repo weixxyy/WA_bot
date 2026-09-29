@@ -1,4 +1,0 @@
-<div class="table-wrap"><table><thead><tr><th>#</th><th>Запуск</th><th>Состояние</th><th>Прогресс</th><th>Отправлено</th><th>Ошибки</th></tr></thead><tbody>
-{% for run in runs %}<tr><td><a href="/history/{{ run.id }}">{{ run.id }}</a></td><td>{{ run.started_at }}</td><td><span class="badge {{ run.status }}">{{ run.status }}</span>{% if run.skipped_reason %}<small>{{ run.skipped_reason }}</small>{% endif %}</td><td>{{ run.completed_attempts }} / {{ run.planned_attempts }}</td><td>{{ run.sent_count }}</td><td>{{ run.error_count }}</td></tr>
-{% else %}<tr><td colspan="6" class="muted">Прогонов пока нет.</td></tr>{% endfor %}
-</tbody></table></div>
