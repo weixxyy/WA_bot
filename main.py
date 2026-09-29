@@ -20,6 +20,9 @@ def run_once() -> dict:
     # У человека, только что скачавшего проект, каталога profiles/ ещё нет.
     profiles_dir = ensure_profiles_dir()
     log.info("Каталог профилей: %s", profiles_dir)
+    # имя профиля -> сколько групп, из которых его выгнали за этот прогон
+    # (None, если статистику профиля прочитать не удалось).
+    run_stats = {}
     with sync_playwright() as pw:
         login_dict = login_check(pw)
         if not login_dict['logged']:
@@ -43,7 +46,19 @@ def run_once() -> dict:
                 # Сбой на одном профиле не должен прерывать обход остальных.
                 log.exception("Профиль %s: сценарий прерван ошибкой", profile)
             finally:
+                # Итог печатаем и при ошибке: bot_stats.json уже на диске.
+                run_stats[profile.name] = script.log_stats(profile)
                 context.close()
+
+    if run_stats:
+        summary = script.save_run_summary(run_stats)
+        log.info(
+            "Сводка прогона: выгнан из %s групп(ы) суммарно по %s профилям "
+            "(файл %s)",
+            summary["total_kicked"],
+            len(run_stats),
+            script.SUMMARY_FILE,
+        )
 
     if login_dict['unlogged']:
         log.info('В списке номеров есть незарегестрированные аккаунты\n'

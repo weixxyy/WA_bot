@@ -3,12 +3,19 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from logger import get_logger
+from logger import LOG_DIR, get_logger
 
 log = get_logger(__name__)
 
 # Статистика по профилю лежит рядом с его Firefox-профилем.
 STATS_FILE_NAME = "bot_stats.json"
+
+# Сводка по прогонам (сколько групп «потерял» каждый профиль) лежит рядом
+# с логами, чтобы не смешиваться с Firefox-профилем.
+SUMMARY_FILE = LOG_DIR / "stats_summary.json"
+
+# Столько последних прогонов храним в сводке, чтобы файл не рос бесконечно.
+MAX_RUNS_IN_SUMMARY = 100
 
 
 def _stats_path(profile) -> Path:
@@ -38,6 +45,99 @@ def _reset_stats(profile) -> dict:
     _save_stats(profile, stats)
     log.info("Статистика профиля %s обнулена: %s", profile, stats)
     return stats
+
+
+def read_stats(profile) -> dict | None:
+    """Читает статистику профиля из ``bot_stats.json``.
+
+    :return: словарь статистики либо ``None``, если файла ещё нет (например,
+        сценарий упал до старта) или он повреждён: вывод статистики не должен
+        ронять прогон по остальным профилям.
+    """
+    path = _stats_path(profile)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError):
+        log.exception("Не удалось прочитать статистику %s", path)
+        return None
+    if not isinstance(data, dict):
+        log.warning("Статистика %s неожиданного формата: %r", path, data)
+        return None
+    return data
+
+
+def log_stats(profile) -> int | None:
+    """Пишет в лог, из скольких групп профиль был выгнан за прогон.
+
+    Вызывается после отработки профиля, в том числе когда сценарий прервался
+    ошибкой: ``bot_stats.json`` к этому моменту уже лежит на диске.
+
+    :return: ``kicked_count`` из ``bot_stats.json`` либо ``None``, если
+        статистику прочитать не удалось.
+    """
+    stats = read_stats(profile)
+    if stats is None:
+        log.warning(
+            "Профиль %s: статистика недоступна (файл не найден или повреждён)",
+            profile,
+        )
+        return None
+    kicked = stats.get("kicked_count")
+    log.info("Итог по профилю %s: выгнан из %s групп(ы) за прогон", profile, kicked)
+    return kicked
+
+
+def _read_summary() -> list:
+    """Читает историю сводок из :data:`SUMMARY_FILE`.
+
+    Отсутствующий или повреждённый файл трактуется как пустая история: сводка
+    начнётся заново, а прогон из-за этого не прерывается.
+    """
+    try:
+        data = json.loads(SUMMARY_FILE.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return []
+    except (OSError, json.JSONDecodeError):
+        log.exception("Сводка %s повреждена, начинаю историю заново", SUMMARY_FILE)
+        return []
+    if not isinstance(data, list):
+        log.warning("Сводка %s неожиданного формата, начинаю историю заново", SUMMARY_FILE)
+        return []
+    return data
+
+
+def save_run_summary(results: dict) -> dict:
+    """Дописывает в :data:`SUMMARY_FILE` сводку по прошедшему прогону.
+
+    В ``profiles`` попадают все профили прогона, а в ``total_kicked`` — сумма
+    только по тем, чью статистику удалось прочитать (``None`` не учитывается).
+
+    :param results: ``{имя профиля: kicked_count или None}``.
+    :return: записанная запись сводки.
+    """
+    counted = [count for count in results.values() if count is not None]
+    entry = {
+        "date": datetime.now().isoformat(timespec="seconds"),
+        "total_kicked": sum(counted),
+        "profiles": results,
+    }
+
+    history = _read_summary()
+    history.append(entry)
+    # Обрезаем историю, чтобы файл не рос бесконечно.
+    history = history[-MAX_RUNS_IN_SUMMARY:]
+
+    SUMMARY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        SUMMARY_FILE.write_text(
+            json.dumps(history, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except OSError:
+        log.exception("Не удалось записать сводку %s", SUMMARY_FILE)
+    return entry
 
 
 def do_script(urls_list, context, profile):
