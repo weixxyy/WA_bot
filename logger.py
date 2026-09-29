@@ -20,7 +20,9 @@ import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from paths import LOG_FILE
+# Файл логов держим рядом с кодом, а не относительно текущего каталога запуска.
+LOG_DIR = Path(__file__).resolve().parent / "logs"
+LOG_FILE = LOG_DIR / "wa_bot.log"
 
 LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"

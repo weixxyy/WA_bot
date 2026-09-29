@@ -1,10 +1,17 @@
 from pathlib import Path
 
-from automation import inspect_profile
 from logger import get_logger
-from paths import PROFILES_DIR
 
 log = get_logger(__name__)
+
+# Каталог профилей держим рядом с кодом, а не относительно текущего каталога
+# запуска (та же логика, что и для логов в logger.py).
+PROJECT_ROOT = Path(__file__).resolve().parent
+PROFILES_DIR = PROJECT_ROOT / "profiles"
+
+# Сколько ждём появления QR-кода: если он не появился — считаем, что вход выполнен.
+QR_WAIT_TIMEOUT_MS = 15_000
+
 
 def ensure_profiles_dir(path=PROFILES_DIR) -> Path:
     """Создаёт каталог профилей, если его нет, и возвращает его путь.
@@ -25,12 +32,32 @@ def check_profile(playwright, profile: Path) -> bool | None:
         ``False`` — показан QR-код, нужен вход,
         ``None`` — профиль проверить не удалось (страница не открылась).
     """
-    status, _detail = inspect_profile(playwright, Path(profile))
-    if status == "authorized":
-        return True
-    if status == "needs_login":
+    context = playwright.firefox.launch_persistent_context(
+        user_data_dir=profile,
+        headless=True,
+    )
+
+    try:
+        page = context.new_page()
+        try:
+            page.goto("https://web.whatsapp.com")
+        except Exception as error:
+            # Сеть, DNS, таймаут загрузки и т.п. Профиль не классифицируем,
+            # чтобы не уронить проверку остальных аккаунтов.
+            log.exception(
+                "Не удалось открыть WhatsApp Web для профиля %s: %s", profile, error
+            )
+            return None
+
+        qr = page.locator('canvas[aria-label="Scan this QR code to link a device!"]')
+        try:
+            qr.wait_for(timeout=QR_WAIT_TIMEOUT_MS)
+        except Exception:
+            return True
         return False
-    return None
+    finally:
+        # Браузер закрываем всегда, в том числе при ошибке загрузки страницы.
+        context.close()
 
 
 def login_check(playwright, profiles_dir=PROFILES_DIR) -> dict[str, list]:
@@ -47,11 +74,7 @@ def login_check(playwright, profiles_dir=PROFILES_DIR) -> dict[str, list]:
             # Служебные файлы вроде .gitkeep профилями не являются.
             continue
 
-        try:
-            is_logged_in = check_profile(playwright, profile)
-        except Exception:
-            log.exception("Профиль %s пропущен: ошибка проверки", profile)
-            is_logged_in = None
+        is_logged_in = check_profile(playwright, profile)
 
         if is_logged_in is None:
             log.warning("Профиль %s пропущен: не удалось проверить", profile)

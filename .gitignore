@@ -3,7 +3,6 @@
 # ======================
 .venv/
 venv/
-.tools/
 
 # ==============
 # Python
@@ -34,7 +33,6 @@ whatsapp_profile/
 logs/
 artifacts/
 test-results/
-.coverage
 
 # ==============
 # IDE
