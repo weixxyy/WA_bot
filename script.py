@@ -140,7 +140,7 @@ def save_run_summary(results: dict) -> dict:
     return entry
 
 
-def do_script(urls_list, context, profile):
+def do_script(urls_list, context, profile, message):
         # Профиль нужен, чтобы вести статистику рядом с ним: context его не отдаёт.
         stats = _reset_stats(profile)
 
@@ -209,10 +209,25 @@ def do_script(urls_list, context, profile):
 
             message_container = page.locator('[contenteditable="true"]')
             message_container.wait_for()
-            message_container.fill("ping")
+            # Enter в WhatsApp отправляет сообщение, а перенос строки внутри текста
+            # делает Shift+Enter. fill() для многострочного текста не годится: в
+            # Firefox он записывает "\n" как символ, который в поле ввода
+            # схлопывается в пробел, — поэтому строки набираем по очереди.
+            lines = message.split("\n")
+            message_container.fill(lines[0])
+            for line in lines[1:]:
+                message_container.press("Shift+Enter")
+                if line:
+                    # insert_text("") падает в Firefox (NS_ERROR_FAILURE), а
+                    # пустая строка — это просто ещё один перенос.
+                    page.keyboard.insert_text(line)
             message_container.press("Enter")
 
-            log.info("Сообщение отправлено в группу %s", group_name)
+            log.info(
+                "Сообщение отправлено в группу %s (%s символов)",
+                group_name,
+                len(message),
+            )
 
             log.info("-- Следующий чат --")
 

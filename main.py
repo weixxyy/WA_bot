@@ -4,7 +4,7 @@ import script
 from playwright.sync_api import sync_playwright
 
 from bot_lock import LOCK_FILE, owner_description, run_lock
-from urls_list import INVITE_URLS
+from urls_list import URLS_FILE, load_invite_urls, load_message
 from login_check import ensure_profiles_dir, login_check
 from logger import get_logger, setup_logging
 from scheduler import DEFAULT_RUN_AT, parse_run_at, run_forever
@@ -15,11 +15,22 @@ log = get_logger(__name__)
 def run_once() -> dict:
     """Один полный прогон бота: проверка профилей и сценарий по каждой группе.
 
+    Ссылки и текст сообщения читаются из ``urls.txt`` / ``send_to.txt`` в начале
+    прогона. Если ссылок нет, прогон пропускается (браузеры не поднимаются).
+
     :return: результат :func:`login_check` со списками ``logged``/``unlogged``.
     """
     # У человека, только что скачавшего проект, каталога profiles/ ещё нет.
     profiles_dir = ensure_profiles_dir()
     log.info("Каталог профилей: %s", profiles_dir)
+    # Конфигурацию читаем до старта браузера: файлы перечитываются каждый прогон,
+    # поэтому правки urls.txt и send_to.txt подхватываются без перезапуска бота.
+    urls = load_invite_urls()
+    message = load_message()
+    log.info("Ссылок в %s: %s", URLS_FILE, len(urls))
+    if not urls:
+        log.error("В %s нет ни одной ссылки — прогон пропущен.", URLS_FILE)
+        return {"logged": [], "unlogged": []}
     # имя профиля -> сколько групп, из которых его выгнали за этот прогон
     # (None, если статистику профиля прочитать не удалось).
     run_stats = {}
@@ -40,7 +51,10 @@ def run_once() -> dict:
             try:
                 log.info("Профиль %s: запускаем сценарий", profile)
                 script.do_script(
-                    urls_list=INVITE_URLS, context=context, profile=profile
+                    urls_list=urls,
+                    context=context,
+                    profile=profile,
+                    message=message,
                 )
             except Exception:
                 # Сбой на одном профиле не должен прерывать обход остальных.
@@ -75,7 +89,7 @@ def parse_args(argv=None):
     вместо :data:`scheduler.DEFAULT_RUN_AT`.
     """
     parser = argparse.ArgumentParser(
-        description="Бот WhatsApp: заходит по invite-ссылкам и отправляет ping.",
+        description="Бот WhatsApp: заходит по invite-ссылкам и отправляет сообщение.",
     )
     parser.add_argument(
         "--once",

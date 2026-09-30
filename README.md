@@ -1,13 +1,18 @@
 # WA_bot — бот WhatsApp Web
 
 Бот на Playwright (Firefox), который заходит по invite-ссылкам в группы WhatsApp
-и отправляет в них сообщение. Ссылки лежат в `urls_list.py`.
+и отправляет в них сообщение. Ссылки лежат в `urls.txt` (по одной в строке),
+текст сообщения — в `send_to.txt`.
 
 ## Требования
 
 - Python 3.10+ (проверено на 3.14)
 - Playwright 1.63 и скачанный браузер Firefox
 - Linux / macOS / Windows
+
+iOS (iPhone / iPad) для запуска не подходит: Playwright управляет настоящим
+Firefox отдельным процессом, а на iOS такого браузера нет. Как быть — в разделе
+«macOS и iOS».
 
 ## Быстрый старт
 
@@ -27,6 +32,9 @@ run.bat                 # по расписанию: 09:00 и 18:00, пока н
 run.bat --once          # один прогон и выход
 ```
 
+macOS: то же самое можно делать двойным кликом из Finder — `setup.command`,
+`login.command`, `run.command` (подробности — в разделе «macOS и iOS»).
+
 То же самое вручную: `.venv/bin/python main.py` (Windows:
 `.venv\Scripts\python.exe main.py`). Подробности — в разделе
 «Расписание запусков» ниже.
@@ -34,10 +42,16 @@ run.bat --once          # один прогон и выход
 Добавить новый аккаунт или удалить существующий профиль (интерактивно) —
 `./login.sh` на Linux / macOS и `login.bat` на Windows.
 
-Скрипт установки создаёт `.venv`, ставит зависимости, скачивает Firefox для
-Playwright и создаёт пустой каталог `profiles/`.
+Скрипт установки создаёт `.venv`, при необходимости доставляет в окружение pip,
+ставит зависимости, скачивает Firefox для Playwright и создаёт пустой каталог
+`profiles/`.
 
-## Расписание запусков (`run.sh` / `run.bat`)
+Ссылки-приглашения кладутся в `urls.txt`, текст отправляемого сообщения — в
+`send_to.txt`. Оба файла лежат рядом с кодом (шаблоны — `urls.txt.example` и
+`send_to.txt.example`) и перечитываются перед каждым прогоном, поэтому правки
+подхватываются без перезапуска бота.
+
+## Расписание запусков (`run.sh` / `run.command` / `run.bat`)
 
 Бот не висит в памяти постоянно, а просыпается в заданные времена суток —
 `scheduler.DEFAULT_RUN_AT` (по умолчанию 09:00 и 18:00, **местное время
@@ -75,6 +89,7 @@ Playwright и создаёт пустой каталог `profiles/`.
 ```bash
 python -m venv .venv                  # 1. окружение
 source .venv/bin/activate             #    Windows: .venv\Scripts\activate
+python -m pip --version               #    если "No module named pip" — см. ниже
 python -m pip install -r requirements.txt   # 2. зависимости
 python -m playwright install firefox  # 3. браузер (без него бот не запустится)
 # Linux, если не хватает системных библиотек:
@@ -83,9 +98,84 @@ mkdir -p profiles                     # 4. каталог профилей (со
 python main.py                        # 5. запуск
 ```
 
+Если `python -m pip --version` отвечает `No module named pip`, значит в сборке
+Python нет модуля `ensurepip` (в Debian/Ubuntu он лежит в пакете `python3-venv`,
+и `python -m venv` при его отсутствии молча создаёт окружение без pip).
+`./setup.sh` (Windows: `setup.bat`) сам доставляет pip в `.venv` через
+[`get-pip.py`](https://bootstrap.pypa.io/get-pip.py); вручную это выглядит так:
+
+```bash
+curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
+python /tmp/get-pip.py                # python — уже из .venv
+# либо, если нужен и системный pip: sudo apt install python3.14-venv
+```
+
 В PyCharm: выберите интерпретатор `.venv` — зависимости из `requirements.txt`
 подтянутся при синхронизации окружения, шаг с `playwright install firefox`
 нужно выполнить из терминала один раз.
+
+## macOS и iOS
+
+### macOS: двойной клик в Finder
+
+`setup.command`, `login.command`, `run.command` — те же действия, что и
+`.sh`-скрипты, но их можно запускать двойным кликом из Finder (macOS открывает
+`.command` в Terminal). Это тонкие обёртки над `setup.sh` / `login.sh` /
+`run.sh`: вся логика остаётся в `.sh`, поэтому из терминала пользуйтесь
+привычными `./setup.sh`, `./login.sh`, `./run.sh`, а `.command` оставьте для
+Finder. Аргументы пробрасываются, так что `./run.command --once` и
+`./login.command --delete 7` работают так же, как их `.sh`-версии.
+
+Что делают обёртки:
+
+- дописывают в `PATH` каталоги `/opt/homebrew/bin` (Apple Silicon) и
+  `/usr/local/bin` (Intel): Finder запускает Terminal с «чистым» окружением, в
+  котором `python3` из Homebrew не виден;
+- ждут Enter перед закрытием окна — иначе Terminal закроется сразу после выхода
+  и ошибку прочитать не получится (`WA_BOT_NO_PAUSE=1` отключает паузу, если
+  обёртку зовут из другого скрипта).
+
+Если macOS отказывается открывать файл («не удалось проверить разработчика» или
+«нет прав на выполнение»), снимите карантин и верните право на запуск:
+
+```bash
+xattr -d com.apple.quarantine setup.command login.command run.command
+chmod +x setup.command login.command run.command
+```
+
+Особенности macOS, о которых стоит знать:
+
+- `python3` в macOS — это Python 3.9 из Xcode Command Line Tools, а проекту нужен
+  3.10+. Поставьте свежий (`brew install python@3.13`) и запустите установку с
+  ним: `PYTHON_BIN=python3.13 ./setup.sh`. `setup.sh` проверяет версию сам и
+  подскажет то же самое, если она слишком старая;
+- `playwright install-deps` — шаг только для Linux: в macOS нужные библиотеки уже
+  в системе, поэтому `setup.sh` пропускает его сам, даже если задан
+  `INSTALL_DEPS=1`;
+- чтобы прогоны по расписанию не пропускались, Mac не должен спать: либо
+  отключите сон в «Системных настройках → Энергосбережение», либо запускайте бота
+  через `caffeinate -i ./run.sh`.
+
+### iOS (iPhone / iPad)
+
+Запустить бота на iPhone или iPad нельзя: Playwright управляет настоящим
+браузером Firefox, который работает отдельным процессом, а на iOS сторонние
+браузерные движки запрещены (только WebKit) и Python-скрипты из терминала тоже
+не запускаются — `.sh`, `.command` и `.bat` там просто нечему выполнять. Поэтому
+бот живёт на Mac или на сервере с Linux, а iPhone используется как пульт и как
+сканер QR-кода:
+
+- QR при добавлении аккаунта сканируется телефоном: в WhatsApp откройте
+  «Связанные устройства» → «Связать устройство» и наведите камеру на QR-код,
+  который открыл `./login.sh` (или `./login.command`) на Mac;
+- управлять ботом с iPhone удобно по SSH: поставьте клиент (Termius, Blink,
+  Secure ShellFish), подключитесь к Mac и запускайте там `./run.sh`,
+  `./run.command --once`, `./login.sh --list`, а логи смотрите той же командой
+  `tail -f logs/wa_bot.log`;
+- если держать SSH-соединение не хочется, запустите `./run.command` на Mac
+  двойным кликом и оставьте окно Terminal открытым, а с телефона поглядывайте в
+  `logs/wa_bot.log` (например, через приложение «Файлы», если проект лежит в
+  iCloud Drive).
 
 ## Каталог `profiles/`
 
@@ -106,7 +196,7 @@ WhatsApp Web (`cookies.sqlite`, `key4.db`, `storage`), то есть факти�
 «Управление аккаунтами» ниже. Там же профиль можно удалить (вручную это то же
 самое — просто удалить его каталог).
 
-## Управление аккаунтами (`login.sh` / `login.bat`)
+## Управление аккаунтами (`login.sh` / `login.command` / `login.bat`)
 
 `login.py` умеет и добавлять аккаунты, и удалять профили. С аргументами он
 браузер не открывает: можно просто посмотреть список профилей или удалить
@@ -119,6 +209,7 @@ Linux / macOS:
 ./login.sh --list                   # показать профили из profiles/
 ./login.sh --delete 7               # удалить профиль profiles/7 (с подтверждением)
 ./login.sh --delete 7 8 --yes       # удалить без подтверждения
+./login.command                     # macOS: то же, но двойным кликом в Finder
 ```
 
 Windows:
@@ -258,9 +349,11 @@ Enter в меню — это пункт 1, то есть добавление: �
    `unlogged`; если страница не открылась (сеть, DNS, прокси), профиль
    пропускается с ошибкой в логе, а остальные проверяются дальше.
 5. `script.py` — для каждого залогиненного профиля создаёт/обнуляет
-   `bot_stats.json`, проходит по ссылкам из `urls_list.py`, вступает в группу
-   и отправляет сообщение; если аккаунт из группы выгнали, увеличивает
-   `kicked_count`. После отработки профиля `main.py` печатает его итог
+   `bot_stats.json`, проходит по ссылкам из `urls.txt`, вступает в группу
+   и отправляет текст из `send_to.txt`; если аккаунт из группы выгнали,
+   увеличивает `kicked_count`. Ссылки и текст читает `urls_list.py`
+   (`load_invite_urls()` / `load_message()`) — заново перед каждым прогоном.
+   После отработки профиля `main.py` печатает его итог
    (`script.log_stats()`), а в конце прогона дописывает сводку по всем
    профилям в `logs/stats_summary.json` (`script.save_run_summary()`).
 6. `logger.py` — логи в консоль и в `logs/wa_bot.log` с ротацией.
@@ -269,7 +362,13 @@ Enter в меню — это пункт 1, то есть добавление: �
 
 ## Настройка
 
-- Ссылки-приглашения: `urls_list.py` → `INVITE_URLS`.
+- Ссылки-приглашения: `urls.txt` — по одной ссылке в строке; пустые строки и
+  строки, начинающиеся с `#`, игнорируются, пробелы по краям обрезаются,
+  дубликаты схлопываются с сохранением порядка. Шаблон — `urls.txt.example`,
+  пути задаются константами `URLS_FILE` / `MESSAGE_FILE` в `urls_list.py`.
+- Текст сообщения: `send_to.txt` берётся целиком, переносы строк сохраняются
+  (многострочный текст уходит одним сообщением). Если файла нет или он пуст,
+  отправляется `urls_list.DEFAULT_MESSAGE` (`ping`) с предупреждением в логе.
 - Времена автозапуска: `scheduler.DEFAULT_RUN_AT` либо аргумент `--at`
   (см. «Расписание запусков»).
 - Уровень и файл логов: `logger.setup_logging(level=..., log_file=...)`.
@@ -283,6 +382,21 @@ Enter в меню — это пункт 1, то есть добавление: �
 
 ## Частые проблемы
 
+- `Файл со ссылками .../urls.txt не найден` — положите `urls.txt` рядом с кодом
+  (по одной ссылке в строке) или скопируйте `urls.txt.example`. Пока файла нет,
+  прогон не начинается.
+- В логе `В .../urls.txt нет ни одной ссылки — прогон пропущен` — файл есть, но в
+  нём только пустые строки и комментарии (`#`): добавьте хотя бы одну ссылку.
+- В логе `Файл с текстом сообщения .../send_to.txt не найден, отправляю 'ping'` —
+  файла с текстом нет или он пуст, бот работает с текстом по умолчанию
+  (`urls_list.DEFAULT_MESSAGE`).
+- `No module named pip` (при этом `python -m venv` об этом не предупредил) —
+  в сборке Python нет модуля `ensurepip`, поэтому окружение создалось без pip.
+  `./setup.sh` / `setup.bat` доставляют pip сами (`python -m ensurepip`, а если
+  его нет — скачанный `get-pip.py`). Вручную: `sudo apt install python3.14-venv`
+  либо `curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py &&
+  .venv/bin/python /tmp/get-pip.py`. Адрес get-pip.py переопределяется:
+  `GET_PIP_URL=... ./setup.sh`.
 - `Executable doesn't exist at .../firefox-...` — не выполнен
   `python -m playwright install firefox`.
 - `Firefox не запускается, не хватает библиотек` (Linux) —
@@ -299,6 +413,16 @@ Enter в меню — это пункт 1, то есть добавление: �
 - `Не удалось удалить ... каталог занят` — в этот момент работает бот или
   Firefox держит профиль. Остановите бота (Ctrl+C), закройте Firefox и
   повторите: `./login.sh --delete <имя>`.
+- macOS: `.command` не открывается («не удалось проверить разработчика» либо
+  «нет прав на выполнение») — файл под карантином или потерял право на запуск
+  после распаковки архива:
+  `xattr -d com.apple.quarantine *.command && chmod +x *.command`.
+- macOS: `Нужен Python 3.10 или новее` — системный `python3` из Xcode Command
+  Line Tools это 3.9. Поставьте `brew install python@3.13` и запустите установку
+  с ним: `PYTHON_BIN=python3.13 ./setup.sh`.
+- Прогоны по расписанию пропускаются, когда компьютер спит (заметнее всего на
+  ноутбуках). На macOS помогает `caffeinate -i ./run.sh`, на Windows — отключить
+  сон в «Электропитании», на Linux — `systemd-inhibit ./run.sh`.
 
 ## Безопасность
 
