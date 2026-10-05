@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="__CSRF_TOKEN__">
+  <title>WA_bot — панель управления</title>
+  <link rel="stylesheet" href="/panel/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">WA_bot<span>панель</span></div>
+    <div class="status" id="status">
+      <span class="chip" id="chip-run">состояние…</span>
+      <span class="chip" id="chip-next">следующий запуск…</span>
+      <span class="chip" id="chip-profiles">профили…</span>
+    </div>
+    <div class="actions">
+      <button id="refresh" class="ghost" type="button">Обновить</button>
+      <button id="run-now" class="primary" type="button">Запустить сейчас</button>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab active" data-view="message" type="button">Сообщение</button>
+    <button class="tab" data-view="links" type="button">Ссылки</button>
+    <button class="tab" data-view="schedule" type="button">Расписание</button>
+    <button class="tab" data-view="profiles" type="button">Номера</button>
+    <button class="tab" data-view="history" type="button">Журнал</button>
+  </nav>
+
+  <main>
+    <section class="view active" id="view-message">
+      <h2>Текст сообщения</h2>
+      <p class="hint">Содержимое файла <code>send_to.txt</code>. Многострочный текст уходит одним сообщением.</p>
+      <textarea id="message-text" rows="8" spellcheck="false"></textarea>
+      <div class="row">
+        <button id="message-save" class="primary" type="button">Сохранить</button>
+        <span class="muted" id="message-info"></span>
+      </div>
+    </section>
+
+    <section class="view" id="view-links">
+      <h2>Ссылки-приглашения</h2>
+      <p class="hint">Файл <code>urls.txt</code>: по одной ссылке в строке, строки с <code>#</code> — комментарии.</p>
+      <textarea id="urls-text" rows="12" spellcheck="false"></textarea>
+      <div class="row">
+        <button id="urls-save" class="primary" type="button">Сохранить</button>
+        <span class="muted" id="urls-info"></span>
+      </div>
+      <details class="import">
+        <summary>Импорт ссылок из текста</summary>
+        <p class="hint">Вставьте любой текст — панель выловит ссылки вида <code>chat.whatsapp.com/...</code> и добавит новые.</p>
+        <textarea id="import-text" rows="5" spellcheck="false" placeholder="https://chat.whatsapp.com/..."></textarea>
+        <div class="row"><button id="import-run" class="ghost" type="button">Добавить ссылки</button></div>
+      </details>
+    </section>
+
+    <section class="view" id="view-schedule">
+      <h2>Расписание</h2>
+      <p class="hint">Хранится в <code>settings.json</code> и применяется сразу, без перезапуска панели.</p>
+      <label class="switch">
+        <input type="checkbox" id="schedule-enabled">
+        <span>Автоматический запуск по расписанию</span>
+      </label>
+      <div class="row wrap" id="times"></div>
+      <div class="row">
+        <input type="time" id="time-input">
+        <button id="time-add" class="ghost" type="button">Добавить время</button>
+        <button id="schedule-save" class="primary" type="button">Сохранить расписание</button>
+        <span class="muted" id="schedule-info"></span>
+      </div>
+    </section>
+
+    <section class="view" id="view-profiles">
+      <h2>Номера (профили Firefox)</h2>
+      <p class="hint">Каталог <code>profiles/</code>: отдельная сессия WhatsApp на каждый номер.</p>
+      <div class="row">
+        <input type="text" id="profile-name" placeholder="имя профиля, например work" spellcheck="false">
+        <button id="profile-add" class="primary" type="button">Добавить номер</button>
+        <span class="muted" id="login-info"></span>
+      </div>
+      <table class="table">
+        <thead>
+          <tr><th>Профиль</th><th>Кики</th><th>Последнее обновление</th><th>Статус</th><th></th></tr>
+        </thead>
+        <tbody id="profiles-body"></tbody>
+      </table>
+    </section>
+
+    <section class="view" id="view-history">
+      <h2>История и журнал</h2>
+      <div class="row"><button id="history-refresh" class="ghost" type="button">Обновить</button></div>
+      <h3>Последние прогоны</h3>
+      <div id="summary" class="cards"></div>
+      <h3>Журнал</h3>
+      <pre id="logs" class="logs"></pre>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="/panel/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,233 @@
+:root {
+  --bg: #0f1720;
+  --panel: #16212c;
+  --panel-2: #1d2a37;
+  --border: #2a3a4a;
+  --text: #e6edf3;
+  --muted: #8ba0b3;
+  --accent: #2f9e5f;
+  --accent-2: #1f7a48;
+  --danger: #c0504d;
+  --warn: #c9922f;
+  --radius: 10px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+h2 { margin: 0 0 6px; font-size: 19px; }
+h3 { margin: 22px 0 10px; font-size: 15px; color: var(--muted); font-weight: 600; }
+
+code {
+  background: var(--panel-2);
+  padding: 1px 5px;
+  border-radius: 5px;
+  font-size: 13px;
+}
+
+.muted { color: var(--muted); font-size: 13px; }
+
+/* ---------------------------------------------------------------- верхушка */
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 20px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.brand {
+  font-weight: 700;
+  font-size: 18px;
+  letter-spacing: 0.3px;
+}
+
+.brand span {
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.status { display: flex; flex-wrap: wrap; gap: 8px; flex: 1; }
+
+.chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.chip.ok { color: #7fdca4; border-color: #2f6b48; }
+.chip.busy { color: #f0c675; border-color: #7a5f24; }
+.chip.bad { color: #f2a3a1; border-color: #7a3a38; }
+
+.actions { display: flex; gap: 8px; }
+
+/* ------------------------------------------------------------------- вкладки */
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 20px 0;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  color: var(--muted);
+  padding: 8px 14px;
+  border-radius: 8px 8px 0 0;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.tab:hover { color: var(--text); }
+.tab.active {
+  color: var(--text);
+  background: var(--panel);
+  border-color: var(--border);
+}
+
+main { padding: 20px; max-width: 1080px; margin: 0 auto; }
+
+.view { display: none; }
+.view.active { display: block; }
+
+.hint { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+
+/* ----------------------------------------------------------------- контролы */
+.row { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.row.wrap { flex-wrap: wrap; gap: 8px; }
+
+button {
+  font: inherit;
+  padding: 8px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  transition: filter 0.15s;
+}
+
+button:hover { filter: brightness(1.15); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+button.primary { background: var(--accent); border-color: var(--accent-2); }
+button.ghost { background: transparent; }
+button.danger { background: transparent; border-color: #6a3432; color: #f2a3a1; }
+button.small { padding: 4px 10px; font-size: 13px; }
+
+input[type="text"], input[type="time"], textarea {
+  font: inherit;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+textarea { width: 100%; resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 14px; }
+input[type="text"] { min-width: 220px; }
+
+.switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+.switch input { width: 18px; height: 18px; accent-color: var(--accent); }
+
+/* ------------------------------------------------------------------- метки */
+.time-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 4px 12px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+
+.time-chip button {
+  border: none;
+  background: transparent;
+  padding: 0 6px;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--muted);
+}
+
+.time-chip button:hover { color: #f2a3a1; }
+.time-chip.empty { color: var(--muted); border-style: dashed; }
+
+/* ------------------------------------------------------------------ таблица */
+.table { width: 100%; border-collapse: collapse; margin-top: 14px; }
+.table th, .table td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); font-size: 14px; }
+.table th { color: var(--muted); font-weight: 600; }
+.table td:last-child, .table th:last-child { text-align: right; }
+.actions-cell { display: flex; gap: 6px; justify-content: flex-end; }
+
+/* ------------------------------------------------------------------ карточки */
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; }
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; }
+.card .date { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+.card .line { font-size: 13px; }
+.card .line b { color: #7fdca4; }
+
+/* -------------------------------------------------------------------- логи */
+.logs {
+  background: #0a1017;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  max-height: 420px;
+  overflow: auto;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ------------------------------------------------------------------- тосты */
+.toast {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  max-width: 420px;
+  padding: 12px 16px;
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  font-size: 14px;
+  z-index: 20;
+}
+
+.toast.ok { border-color: #2f6b48; }
+.toast.error { border-color: #7a3a38; }
+
+.import { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 12px; }
+.import summary { cursor: pointer; color: var(--muted); }
+.import summary:hover { color: var(--text); }
+.spin { color: var(--warn); }
+
+.status-ok { color: #7fdca4; }
+.status-bad { color: #f2a3a1; }
+.status-warn { color: #f0c675; }
+
