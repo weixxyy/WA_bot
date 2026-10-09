@@ -41,6 +41,11 @@ test-results/
 # шаблоны, чтобы у человека после клонирования были файлы-образцы.
 urls.txt
 send_to.txt
+# Списки-сортировка скрипта вступления (join_groups.py): заполняются самим
+# прогоном, в git не нужны.
+only_admins_groups.txt
+closed_groups.txt
+open_groups.txt
 # Настройки панели (расписание запусков): в git попадает только settings.json.example.
 settings.json
 

@@ -1,12 +1,13 @@
 """Настройки веб-панели: ``settings.json`` рядом с кодом.
 
-Панель хранит здесь расписание запусков и переключатель автозапуска. Файл
-перечитывается планировщиком панели на каждом цикле, поэтому правки из
-интерфейса применяются без перезапуска — та же логика, что и у ``urls.txt`` /
-``send_to.txt`` в ``urls_list.py``.
+Панель хранит здесь расписания запусков (рассылка сообщений и вступление в
+группы) и переключатели автозапуска. Файл перечитывается планировщиком панели на
+каждом цикле, поэтому правки из интерфейса применяются без перезапуска — та же
+логика, что и у ``urls.txt`` / ``send_to.txt`` в ``urls_list.py``.
 
-Значения по умолчанию берутся из :data:`scheduler.DEFAULT_RUN_AT`, чтобы
-поведение панели и CLI (``run.sh`` / ``main.py``) совпадало. Сам файл в git не
+Значения по умолчанию берутся из :data:`scheduler.DEFAULT_RUN_AT` и
+:data:`scheduler.DEFAULT_JOIN_RUN_AT`, чтобы поведение панели и CLI
+(``run.sh`` / ``main.py`` / ``join_groups.py``) совпадало. Сам файл в git не
 попадает: рядом лежит шаблон ``settings.json.example``.
 """
 
@@ -14,7 +15,7 @@ import json
 from pathlib import Path
 
 from logger import get_logger
-from scheduler import DEFAULT_RUN_AT
+from scheduler import DEFAULT_JOIN_RUN_AT, DEFAULT_RUN_AT
 
 log = get_logger(__name__)
 
@@ -27,8 +28,13 @@ ENCODING = "utf-8-sig"
 
 
 def default_settings() -> dict:
-    """Настройки по умолчанию: автозапуск включён, времена как в CLI."""
-    return {"enabled": True, "times": list(DEFAULT_RUN_AT)}
+    """Настройки по умолчанию: оба автозапуска включены, времена как в CLI."""
+    return {
+        "enabled": True,
+        "times": list(DEFAULT_RUN_AT),
+        "join_enabled": True,
+        "join_times": list(DEFAULT_JOIN_RUN_AT),
+    }
 
 
 def load(path=SETTINGS_FILE) -> dict:
@@ -55,6 +61,11 @@ def load(path=SETTINGS_FILE) -> dict:
     times = data.get("times")
     if isinstance(times, list):
         settings["times"] = [str(value) for value in times]
+    if isinstance(data.get("join_enabled"), bool):
+        settings["join_enabled"] = data["join_enabled"]
+    join_times = data.get("join_times")
+    if isinstance(join_times, list):
+        settings["join_times"] = [str(value) for value in join_times]
     return settings
 
 

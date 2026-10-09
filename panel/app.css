@@ -77,6 +77,7 @@ code {
 .chip.ok { color: #7fdca4; border-color: #2f6b48; }
 .chip.busy { color: #f0c675; border-color: #7a5f24; }
 .chip.bad { color: #f2a3a1; border-color: #7a3a38; }
+.chip.warn { color: var(--warn); border-color: #7a5f24; }
 
 .actions { display: flex; gap: 8px; }
 
@@ -147,6 +148,8 @@ input[type="text"], input[type="time"], textarea {
 }
 
 textarea { width: 100%; resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 14px; }
+/* Списки, которые заполняет скрипт вступления: их не редактируют, только читают. */
+textarea[readonly] { background: var(--panel-2); color: var(--muted); cursor: default; }
 input[type="text"] { min-width: 220px; }
 
 .switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
@@ -221,6 +224,37 @@ input[type="text"] { min-width: 220px; }
 
 .toast.ok { border-color: #2f6b48; }
 .toast.error { border-color: #7a3a38; }
+
+/* ------------------------------------------------- остановка панели */
+/* Оверлей перекрывает страницу целиком: панель уже выключается, и нажимать в
+   ней нечего. `[hidden]` здесь обязателен — одно `display: flex` перебило бы
+   атрибут hidden, и карточка висела бы всегда. */
+.overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(9, 14, 20, 0.88);
+  z-index: 30;
+}
+
+.overlay[hidden] { display: none; }
+
+.overlay-card {
+  max-width: 460px;
+  padding: 24px 28px;
+  text-align: center;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+}
+
+.overlay-card h2 { margin-bottom: 10px; }
+.overlay-card p { margin: 0 0 10px; }
+.overlay-card p:last-child { margin-bottom: 0; }
 
 .import { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 12px; }
 .import summary { cursor: pointer; color: var(--muted); }

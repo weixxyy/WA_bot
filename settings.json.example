@@ -3,5 +3,10 @@
   "times": [
     "09:00",
     "18:00"
+  ],
+  "join_enabled": true,
+  "join_times": [
+    "10:00",
+    "19:00"
   ]
 }

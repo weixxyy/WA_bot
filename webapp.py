@@ -4,8 +4,11 @@
 (``TrustedHostMiddleware``), поэтому доступна лишь с того же компьютера, где
 запущен бот. Изменяющие запросы требуют CSRF-токен, встроенный в отданную
 страницу: сторонний сайт не может прочитать его из-за политики одного источника.
-Все операции вызывают существующие функции бота (``main.run_once``, ``login``,
-``login_check``) — логика прогона не меняется.
+Все операции вызывают существующие функции бота (``main.run_once``,
+``join_groups.run_once``, ``login``, ``login_check``) — логика прогона не меняется.
+Кнопка «Остановить панель» (``POST /api/stop``) гасит сам процесс: uvicorn
+завершается штатно, lifespan останавливает планировщик, а ``finally`` убирает
+``logs/wa_panel.json`` и освобождает блокировку бота.
 
 Запуск::
 
@@ -20,18 +23,20 @@ import secrets
 import signal
 import socket
 import threading
+import time
 import webbrowser
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+import group_lists
 import urls_list
 from bot_lock import owner_description, run_lock
 from logger import LOG_DIR, LOG_FILE, get_logger, setup_logging
@@ -59,6 +64,46 @@ INVITE_PATTERN = re.compile(
     r"https?://chat\.whatsapp\.com/[A-Za-z0-9_-]+(?:\?[^\s<>\"']*)?",
     re.IGNORECASE,
 )
+
+# Статика панели: её mtime — «версия страницы» в ссылках на app.css/app.js.
+PANEL_ASSETS = (PANEL_DIR / "app.css", PANEL_DIR / "app.js")
+
+# Модули бота и панели: если любой из них новее старта панели, в памяти остался
+# старый код (Python читает модули один раз), а значит правки не применяются.
+TRACKED_CODE = (
+    "group_lists.py",
+    "join_groups.py",
+    "login.py",
+    "login_check.py",
+    "main.py",
+    "scheduler.py",
+    "script.py",
+    "service.py",
+    "settings.py",
+    "urls_list.py",
+    "webapp.py",
+)
+
+# Момент запуска процесса панели: с ним сравниваются mtime файлов кода.
+PANEL_STARTED_AT = time.time()
+
+
+def _mtime(path) -> float:
+    """Время последней правки файла (0.0, если файла нет)."""
+    try:
+        return Path(path).stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _panel_version() -> str:
+    """Версия статики панели для ссылок ``?v=`` — гасит кэш браузера."""
+    return str(int(max(_mtime(asset) for asset in PANEL_ASSETS)))
+
+
+def _code_stale() -> bool:
+    """``True``, если файлы кода новее запуска панели (правки не применены)."""
+    return any(_mtime(PROJECT_ROOT / name) > PANEL_STARTED_AT for name in TRACKED_CODE)
 
 
 class TextPayload(BaseModel):
@@ -127,7 +172,41 @@ def _write_text_file(path, text: str) -> None:
         raise HTTPException(status_code=500, detail=f"Не удалось записать {Path(path).name}: {error}")
 
 
-def create_app(service: BotService) -> FastAPI:
+class PanelStopper:
+    """Просьба к uvicorn-серверу завершиться (кнопка панели, закрытие терминала).
+
+    Приложение собирается раньше сервера (``uvicorn.Config`` требует готовый
+    ``app``), поэтому ссылку на сервер держим здесь. Все поводы остановки —
+    кнопка «Остановить панель» в интерфейсе и ``SIGHUP`` при закрытии окна
+    терминала — идут через :meth:`request`: в журнале всегда есть строка с
+    причиной, а повторная просьба не гасит панель дважды.
+
+    Панель выключается штатно: uvicorn дописывает текущий ответ, закрывает
+    соединения и вызывает lifespan, где :meth:`BotService.stop` останавливает
+    планировщик и ждёт текущий прогон до 15 секунд.
+    """
+
+    def __init__(self) -> None:
+        self._server: uvicorn.Server | None = None
+        self.requested = threading.Event()
+
+    def attach(self, server: uvicorn.Server) -> None:
+        """Запоминает сервер: до этого момента останавливать ещё нечего."""
+        self._server = server
+
+    def request(self) -> bool:
+        """Просит сервер завершиться. ``False`` — остановка уже заказана."""
+        if self.requested.is_set():
+            return False
+        if self._server is None:
+            log.warning("Остановка панели запрошена до подключения сервера — пропускаю")
+            return False
+        self.requested.set()
+        self._server.should_exit = True
+        return True
+
+
+def create_app(service: BotService, stopper: PanelStopper) -> FastAPI:
     """Собирает FastAPI-приложение панели вокруг готового :class:`BotService`."""
     csrf_token = secrets.token_urlsafe(24)
 
@@ -150,13 +229,25 @@ def create_app(service: BotService) -> FastAPI:
     def require_csrf(request: Request) -> None:
         """Пропускает только запросы с токеном, выданным вместе со страницей."""
         token = request.headers.get("x-csrf-token", "")
-        if not token or not secrets.compare_digest(token, csrf_token):
+        # Сравниваем байты: secrets.compare_digest не принимает строки с не-ASCII
+        # символами и падал бы TypeError (500) на заголовке вроде «чужой» вместо
+        # честного 403.
+        if not token or not secrets.compare_digest(
+            token.encode("utf-8", "surrogateescape"), csrf_token.encode()
+        ):
             raise HTTPException(status_code=403, detail="Недействительный CSRF-токен")
 
     # --------------------------------------------------------------- состояние
     @app.get("/api/status")
     def api_status():
-        return service.status()
+        # panel_version нужен странице, чтобы заметить собственное устаревание
+        # (старый app.js в браузере), code_stale — чтобы напомнить про
+        # перезапуск панели после правок кода.
+        return {
+            **service.status(),
+            "panel_version": _panel_version(),
+            "code_stale": _code_stale(),
+        }
 
     # ---------------------------------------------------------------- сообщение
     @app.get("/api/message")
@@ -203,12 +294,27 @@ def create_app(service: BotService) -> FastAPI:
         log.info("Панель импортировала ссылки: добавлено %s, всего %s", len(added), len(merged))
         return {"added": added, "duplicates": duplicates, "urls": merged}
 
+    # ------------------------------------------------ отсортированные ссылки
+    @app.get("/api/groups")
+    def get_groups():
+        """Списки ссылок, которые заполняет скрипт вступления в группы."""
+        return {
+            "only_admins": group_lists.load(group_lists.ONLY_ADMINS_FILE),
+            "closed": group_lists.load(group_lists.CLOSED_FILE),
+            "open": group_lists.load(group_lists.OPEN_FILE),
+        }
+
     # --------------------------------------------------------------- расписание
     @app.get("/api/schedule")
     def get_schedule():
         cfg = service.get_schedule()
         status = service.status()
-        return {**cfg, "next_run": status["next_run"], "timezone": status["timezone"]}
+        return {
+            **cfg,
+            "next_run": status["next_run"],
+            "next_run_join": status["next_run_join"],
+            "timezone": status["timezone"],
+        }
 
     @app.put("/api/schedule", dependencies=[Depends(require_csrf)])
     def put_schedule(payload: SchedulePayload):
@@ -219,15 +325,54 @@ def create_app(service: BotService) -> FastAPI:
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error))
         status = service.status()
-        return {**cfg, "next_run": status["next_run"], "timezone": status["timezone"]}
+        return {
+            **cfg,
+            "next_run": status["next_run"],
+            "next_run_join": status["next_run_join"],
+            "timezone": status["timezone"],
+        }
+
+    @app.put("/api/schedule/join", dependencies=[Depends(require_csrf)])
+    def put_join_schedule(payload: SchedulePayload):
+        """Расписание скрипта вступления: правится независимо от рассылки."""
+        try:
+            cfg = service.update_join_schedule(payload.enabled, payload.times)
+        except ConfigurationError as error:
+            raise HTTPException(status_code=400, detail=str(error))
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error))
+        status = service.status()
+        return {
+            **cfg,
+            "next_run": status["next_run"],
+            "next_run_join": status["next_run_join"],
+            "timezone": status["timezone"],
+        }
 
     # -------------------------------------------------------------------- прогон
+    def start_manual_run(kind: str) -> dict:
+        """Запускает прогон и пишет в журнал, принят он или отклонён.
+
+        Без этих строк по журналу нельзя отличить «клик не дошёл до панели» от
+        «панель отказала: уже идёт другой прогон».
+        """
+        try:
+            result = service.start_run("manual", kind)
+        except ServiceBusyError as error:
+            log.warning("Панель: запуск (%s) отклонён: %s", kind, error)
+            raise HTTPException(status_code=409, detail=str(error))
+        log.info("Панель: запуск (%s, вручную) принят", kind)
+        return result
+
     @app.post("/api/run", dependencies=[Depends(require_csrf)])
     def run_now():
-        try:
-            return service.start_run("manual")
-        except ServiceBusyError as error:
-            raise HTTPException(status_code=409, detail=str(error))
+        """Одиночный прогон рассылки (``main.run_once``)."""
+        return start_manual_run("message")
+
+    @app.post("/api/run/join", dependencies=[Depends(require_csrf)])
+    def run_join_now():
+        """Одиночный прогон скрипта вступления — без отправки сообщений."""
+        return start_manual_run("join")
 
     # ------------------------------------------------------------------ профили
     @app.get("/api/profiles")
@@ -281,11 +426,44 @@ def create_app(service: BotService) -> FastAPI:
         return {"text": _tail(LOG_FILE, lines), "lines": lines}
 
     # -------------------------------------------------------------------- панель
+    @app.post("/api/stop", dependencies=[Depends(require_csrf)])
+    def stop_panel():
+        """Выключает панель: то же, что Ctrl+C в окне терминала или ``./stop.sh``.
+
+        Панель — и есть процесс бота, поэтому остановка панели освобождает
+        блокировку ``logs/wa_bot.lock`` и возвращает запуск ``run.sh`` /
+        ``join.sh`` / второй ``./web.sh``. Ответ успевает уйти в браузер:
+        uvicorn замечает флаг не мгновенно, и только потом закрывает соединения
+        и вызывает lifespan, где ``service.stop()`` ждёт текущий прогон до
+        15 секунд. Поэтому страница показывает «останавливается» и опрашивает
+        ``/api/status``, пока панель не перестанет отвечать.
+        """
+        status = service.status()
+        if not stopper.request():
+            raise HTTPException(status_code=409, detail="Панель уже останавливается")
+        log.info(
+            "Панель: команда остановки из интерфейса (прогон: %s)",
+            "идёт" if status["running"] else "нет",
+        )
+        return {"stopping": True, "running": status["running"], "kind": status["kind"]}
+
     @app.get("/", response_class=HTMLResponse)
     def index():
         html = (PANEL_DIR / "index.html").read_text(encoding=ENCODING)
         # Токен подставляем при отдаче: сторонний сайт не сможет его прочитать.
-        return html.replace("__CSRF_TOKEN__", csrf_token)
+        # Версия статики гасит кэш браузера после правок app.js/app.css.
+        return html.replace("__CSRF_TOKEN__", csrf_token).replace(
+            "__PANEL_VERSION__", _panel_version()
+        )
+
+    @app.get("/panel/index.html", include_in_schema=False)
+    def panel_index_alias():
+        """Статикой эту страницу не отдаём: в ней остался бы ``__CSRF_TOKEN__``.
+
+        Такую ссылку легко получить из истории браузера, а страница с
+        нерабочим токеном молча отклоняет все изменяющие запросы (403).
+        """
+        return RedirectResponse("/", status_code=307)
 
     app.mount("/panel", StaticFiles(directory=PANEL_DIR), name="panel")
     return app
@@ -351,12 +529,14 @@ def _open_browser(url: str) -> None:
     threading.Timer(1.0, _open).start()
 
 
-def _install_shutdown_handler(server: uvicorn.Server) -> None:
-    """Просит uvicorn остановиться по SIGHUP (закрытие окна терминала)."""
+def _install_shutdown_handler(stopper: PanelStopper) -> None:
+    """Просит панель остановиться по SIGHUP (закрытие окна терминала)."""
 
     def _request_shutdown(signum, _frame) -> None:
+        # Через тот же PanelStopper, что и кнопка в интерфейсе: одна причина
+        # остановки — одна строка в журнале.
         log.info("Получен сигнал %s — останавливаю панель", signum)
-        server.should_exit = True
+        stopper.request()
 
     # SIGINT/SIGTERM uvicorn обрабатывает сам; на Windows SIGHUP нет.
     if hasattr(signal, "SIGHUP"):
@@ -377,18 +557,26 @@ def main(argv=None) -> int:
                 log.info("Панель уже открыта: http://127.0.0.1:%s/", existing)
                 if not args.no_browser:
                     _open_browser(f"http://127.0.0.1:{existing}/")
+            log.info(
+                "Остановить: кнопка «Остановить панель» в интерфейсе "
+                "или ./stop.sh (Windows: stop.bat)"
+            )
             return 1
 
         service = BotService()
-        app = create_app(service)
+        # Панель и бот — один процесс, поэтому кнопка «Остановить панель» гасит
+        # и планировщик, и блокировку: серверу остаётся лишь попросить выход.
+        stopper = PanelStopper()
+        app = create_app(service, stopper)
         server = uvicorn.Server(
             uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
         )
-        _install_shutdown_handler(server)
+        stopper.attach(server)
+        _install_shutdown_handler(stopper)
 
         _write_runtime(port)
         log.info("Панель доступна: %s", url)
-        log.info("Остановить: Ctrl+C или закройте это окно терминала.")
+        log.info("Остановить: Ctrl+C, кнопка «Остановить панель» в интерфейсе")
         if not args.no_browser:
             _open_browser(url)
 

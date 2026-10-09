@@ -22,6 +22,7 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
+import join_groups
 import login
 import login_check
 import script
@@ -84,6 +85,27 @@ def detect_profile_state(page) -> str | None:
     return None
 
 
+def _next_run(cfg, enabled_key, times_key) -> datetime | None:
+    """Ближайший слот расписания ``(enabled_key, times_key)`` или ``None``.
+
+    Некорректные времена трактуются как «расписания нет»: опечатка в
+    ``settings.json`` не должна ронять ни панель, ни планировщик.
+
+    :param cfg: настройки из :func:`settings.load`.
+    :param enabled_key: ключ переключателя автозапуска (``"enabled"`` /
+        ``"join_enabled"``).
+    :param times_key: ключ списка времён (``"times"`` / ``"join_times"``).
+    """
+    if not cfg.get(enabled_key) or not cfg.get(times_key):
+        return None
+    try:
+        times = parse_run_at(cfg[times_key])
+    except ValueError:
+        log.exception("Некорректное расписание %s=%s, жду правок", times_key, cfg.get(times_key))
+        return None
+    return next_run_at(times) if times else None
+
+
 class BotService:
     """Состояние панели: планировщик, прогон, QR-вход, Playwright-лок."""
 
@@ -102,6 +124,7 @@ class BotService:
         self._run_thread = None
         self._run_active = False
         self._run_trigger = None
+        self._run_kind = None
         self._run_started_at = None
         self._login_jobs = {}
         self._login_counter = 0
@@ -147,23 +170,22 @@ class BotService:
         with self._state_lock:
             run_active = self._run_active
             trigger = self._run_trigger
+            kind = self._run_kind
             started_at = self._run_started_at
 
-        next_run = None
-        if cfg["enabled"] and cfg["times"]:
-            try:
-                times = parse_run_at(cfg["times"])
-                if times:
-                    next_run = next_run_at(times).isoformat(timespec="seconds")
-            except ValueError:
-                next_run = None
+        next_run = _next_run(cfg, "enabled", "times")
+        next_run_join = _next_run(cfg, "join_enabled", "join_times")
 
         profiles = login.list_profiles(login_check.PROFILES_DIR)
         return {
             "running": run_active,
             "trigger": trigger,
+            "kind": kind,
             "started_at": started_at.isoformat(timespec="seconds") if started_at else None,
-            "next_run": next_run,
+            "next_run": next_run.isoformat(timespec="seconds") if next_run else None,
+            "next_run_join": (
+                next_run_join.isoformat(timespec="seconds") if next_run_join else None
+            ),
             "schedule": cfg,
             "profiles_count": len(profiles),
             "timezone": datetime.now().astimezone().tzname(),
@@ -175,28 +197,61 @@ class BotService:
         return settings_store.load(self.settings_path)
 
     def update_schedule(self, enabled: bool, times) -> dict:
-        """Проверяет и сохраняет расписание, будит планировщик.
+        """Проверяет и сохраняет расписание рассылки, будит планировщик.
+
+        Расписание вступления (``join_enabled`` / ``join_times``) не трогается:
+        два расписания правятся независимо.
 
         :raises ConfigurationError: если ни одно время не задано.
         :raises ValueError: если время не в формате ``ЧЧ:ММ``.
         """
+        cfg = self._apply_schedule(enabled, times, "enabled", "times")
+        log.info(
+            "Расписание рассылки обновлено: enabled=%s, times=%s",
+            cfg["enabled"],
+            cfg["times"],
+        )
+        return cfg
+
+    def update_join_schedule(self, enabled: bool, times) -> dict:
+        """Проверяет и сохраняет расписание вступления, будит планировщик.
+
+        :raises ConfigurationError: если ни одно время не задано.
+        :raises ValueError: если время не в формате ``ЧЧ:ММ``.
+        """
+        cfg = self._apply_schedule(enabled, times, "join_enabled", "join_times")
+        log.info(
+            "Расписание вступления обновлено: enabled=%s, times=%s",
+            cfg["join_enabled"],
+            cfg["join_times"],
+        )
+        return cfg
+
+    def _apply_schedule(self, enabled, times, enabled_key, times_key) -> dict:
+        """Пишет пару ``(enabled_key, times_key)`` в ``settings.json`` целиком.
+
+        Остальные ключи сохраняются: расписания рассылки и вступления живут в
+        одном файле и правятся из разных полей панели.
+        """
         parsed = parse_run_at(times)
         if not parsed:
             raise ConfigurationError("Укажите хотя бы одно время запуска")
-        cfg = {
-            "enabled": bool(enabled),
-            "times": [moment.strftime("%H:%M") for moment in parsed],
-        }
+        cfg = settings_store.load(self.settings_path)
+        cfg[enabled_key] = bool(enabled)
+        cfg[times_key] = [moment.strftime("%H:%M") for moment in parsed]
         settings_store.save(cfg, self.settings_path)
         # Даём планировщику понять, что расписание поменялось и его надо перечитать.
         self.settings_changed.set()
-        log.info("Расписание обновлено: enabled=%s, times=%s", cfg["enabled"], cfg["times"])
         return cfg
 
     # ----------------------------------------------------------------- прогон
-    def start_run(self, trigger: str = "manual") -> dict:
-        """Запускает ``main.run_once()`` в отдельном потоке.
+    def start_run(self, trigger: str = "manual", kind: str = "message") -> dict:
+        """Запускает прогон выбранного скрипта в отдельном потоке.
 
+        :param trigger: ``"manual"`` или ``"scheduled"`` — только для интерфейса
+            и логов.
+        :param kind: ``"message"`` — рассылка (``main.run_once``), ``"join"`` —
+            вступление в группы (:func:`join_groups.run_once`).
         :raises ServiceBusyError: если прогон или QR-вход уже выполняется.
         """
         with self._state_lock:
@@ -206,33 +261,41 @@ class BotService:
                 raise ServiceBusyError("Идёт добавление номера, дождитесь завершения")
             self._run_active = True
             self._run_trigger = trigger
+            self._run_kind = kind
             self._run_started_at = datetime.now()
             started_at = self._run_started_at
 
         thread = threading.Thread(
             target=self._run_worker,
-            args=(trigger,),
+            args=(trigger, kind),
             name="wa-bot-run",
             daemon=True,
         )
         with self._state_lock:
             self._run_thread = thread
         thread.start()
-        return {"trigger": trigger, "started_at": started_at.isoformat(timespec="seconds")}
+        return {
+            "trigger": trigger,
+            "kind": kind,
+            "started_at": started_at.isoformat(timespec="seconds"),
+        }
 
-    def _run_worker(self, trigger: str) -> None:
+    def _run_worker(self, trigger: str, kind: str) -> None:
+        # Реальный прогон целиком делает выбранный скрипт: панель логику не копирует.
+        job = join_groups.run_once if kind == "join" else run_once
         try:
-            log.info("Прогон (%s) начат", trigger)
+            log.info("Прогон (%s, %s) начат", kind, trigger)
             with self.playwright_lock:
-                run_once()
-            log.info("Прогон (%s) завершён", trigger)
+                job()
+            log.info("Прогон (%s, %s) завершён", kind, trigger)
         except Exception:
             # Падение прогона не должно убивать панель и планировщик.
-            log.exception("Прогон (%s) завершился ошибкой", trigger)
+            log.exception("Прогон (%s, %s) завершился ошибкой", kind, trigger)
         finally:
             with self._state_lock:
                 self._run_active = False
                 self._run_trigger = None
+                self._run_kind = None
 
     def _wait_current_run(self) -> None:
         """Ждёт завершения прогона либо остановки панели."""
@@ -415,27 +478,40 @@ class BotService:
         return {"summary": summary[-30:], "profiles": profiles}
 
     # ----------------------------------------------------------- планировщик
+    def _next_job(self, cfg):
+        """Ближайший слот среди обоих расписаний: ``(moment, kind)`` или ``None``.
+
+        Рассылка (``enabled`` / ``times``) и вступление (``join_enabled`` /
+        ``join_times``) планируются вместе: панель держит один поток-планировщик
+        на оба расписания, а ближайший слот сам сообщает свой ``kind``.
+        """
+        candidates = []
+        for kind, enabled_key, times_key in (
+            ("message", "enabled", "times"),
+            ("join", "join_enabled", "join_times"),
+        ):
+            moment = _next_run(cfg, enabled_key, times_key)
+            if moment is not None:
+                candidates.append((moment, kind))
+        if not candidates:
+            return None
+        return min(candidates, key=lambda item: item[0])
+
     def _scheduler_loop(self) -> None:
         while not self.stop_event.is_set():
             cfg = settings_store.load(self.settings_path)
 
-            times = []
-            if cfg["enabled"]:
-                try:
-                    times = parse_run_at(cfg["times"])
-                except ValueError:
-                    log.exception("Некорректное расписание %s, жду правок", cfg["times"])
-                    times = []
-
-            if not times:
+            job = self._next_job(cfg)
+            if job is None:
                 self.settings_changed.wait(timeout=SCHEDULER_TICK_SECONDS)
                 self.settings_changed.clear()
                 continue
 
-            moment = next_run_at(times)
+            moment, kind = job
             delay = max((moment - datetime.now()).total_seconds(), 0.0)
             log.info(
-                "Следующий запуск по расписанию: %s (через %.1f мин)",
+                "Следующий запуск (%s) по расписанию: %s (через %.1f мин)",
+                kind,
                 moment.strftime("%Y-%m-%d %H:%M"),
                 delay / 60,
             )
@@ -457,9 +533,13 @@ class BotService:
                 self.settings_changed.clear()
                 continue
 
-            log.info("Запуск по расписанию: %s", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            log.info(
+                "Запуск (%s) по расписанию: %s",
+                kind,
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            )
             try:
-                self.start_run("scheduled")
+                self.start_run("scheduled", kind)
             except ServiceBusyError as error:
                 log.warning("Запуск по расписанию пропущен: %s", error)
                 self.stop_event.wait(SCHEDULER_TICK_SECONDS)

@@ -1,21 +1,19 @@
 #!/usr/bin/env bash
-# Локальная веб-панель WA_bot в macOS: двойной клик в Finder.
+# Остановка панели WA_bot в macOS: двойной клик в Finder.
 #
-# Тонкая обёртка над web.sh (тот же сценарий для терминала). Аргументы
+# Тонкая обёртка над stop.sh (тот же сценарий для терминала). Аргументы
 # пробрасываются дальше:
-#     ./web.command              # панель и автооткрытие браузера
-#     ./web.command --no-browser # без автооткрытия браузера
-#     ./web.command --port 9000  # другой порт
+#     ./stop.command              # остановить панель или прогон
+#     ./stop.command --dry-run    # только показать, что будет остановлено
+#     ./stop.command --force      # не просить завершиться, а убивать сразу
 #
-# Пока панель работает, окно Terminal должно оставаться открытым: закрытие окна
-# останавливает панель и освобождает блокировку бота. Остановить панель можно и из
-# её интерфейса — кнопкой «Остановить панель» (тогда окно Terminal просто дочитает
-# строку «Нажмите Enter…»).
+# Пригодится, если панель запущена без своего окна Terminal: Ctrl+C нажать негде,
+# а останавливать её всё равно нужно.
 #
 # Если macOS отказывается открывать файл («не удалось проверить разработчика»),
 # снимите карантин и верните право на запуск:
-#     xattr -d com.apple.quarantine setup.command login.command run.command web.command
-#     chmod +x setup.command login.command run.command web.command
+#     xattr -d com.apple.quarantine stop.command
+#     chmod +x stop.command
 
 set -uo pipefail
 
@@ -26,7 +24,7 @@ cd "$(dirname "$0")" || exit 1
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 status=0
-./web.sh "$@" || status=$?
+./stop.sh "$@" || status=$?
 
 # Окно Terminal, открытое двойным кликом, закрывается сразу после выхода из
 # скрипта, поэтому ждём Enter: иначе итог прочитать не успеешь.

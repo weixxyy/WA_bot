@@ -4,8 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="csrf-token" content="__CSRF_TOKEN__">
+  <meta name="panel-version" content="__PANEL_VERSION__">
   <title>WA_bot — панель управления</title>
-  <link rel="stylesheet" href="/panel/app.css">
+  <link rel="stylesheet" href="/panel/app.css?v=__PANEL_VERSION__">
 </head>
 <body>
   <header class="topbar">
@@ -13,11 +14,16 @@
     <div class="status" id="status">
       <span class="chip" id="chip-run">состояние…</span>
       <span class="chip" id="chip-next">следующий запуск…</span>
+      <span class="chip" id="chip-next-join">вступление…</span>
       <span class="chip" id="chip-profiles">профили…</span>
+      <span class="chip warn" id="chip-stale" hidden>страница устарела — обновите (Ctrl+Shift+R)</span>
+      <span class="chip warn" id="chip-code-stale" hidden>код новее — перезапустите панель</span>
     </div>
     <div class="actions">
       <button id="refresh" class="ghost" type="button">Обновить</button>
       <button id="run-now" class="primary" type="button">Запустить сейчас</button>
+      <button id="run-join" class="ghost" type="button">Запустить вступление</button>
+      <button id="stop-panel" class="danger" type="button" title="Выключить панель, остановить планировщик и снять блокировку бота">Остановить панель</button>
     </div>
   </header>
 
@@ -54,6 +60,19 @@
         <textarea id="import-text" rows="5" spellcheck="false" placeholder="https://chat.whatsapp.com/..."></textarea>
         <div class="row"><button id="import-run" class="ghost" type="button">Добавить ссылки</button></div>
       </details>
+
+      <h2>Отсортированные ссылки</h2>
+      <p class="hint">Заполняется скриптом вступления: <code>only_admins_groups.txt</code>, <code>closed_groups.txt</code>, <code>open_groups.txt</code>. Редактировать не нужно — это результат прогонов.</p>
+      <div class="row">
+        <button id="groups-refresh" class="ghost" type="button">Обновить списки</button>
+        <span class="muted" id="groups-info"></span>
+      </div>
+      <h3>Только админы — <code>only_admins_groups.txt</code></h3>
+      <textarea id="groups-only-admins" rows="5" readonly spellcheck="false"></textarea>
+      <h3>Запрос на вступление — <code>closed_groups.txt</code></h3>
+      <textarea id="groups-closed" rows="5" readonly spellcheck="false"></textarea>
+      <h3>Остальные — <code>open_groups.txt</code></h3>
+      <textarea id="groups-open" rows="5" readonly spellcheck="false"></textarea>
     </section>
 
     <section class="view" id="view-schedule">
@@ -69,6 +88,20 @@
         <button id="time-add" class="ghost" type="button">Добавить время</button>
         <button id="schedule-save" class="primary" type="button">Сохранить расписание</button>
         <span class="muted" id="schedule-info"></span>
+      </div>
+
+      <h2>Расписание вступления в группы</h2>
+      <p class="hint">Отдельное расписание для скрипта <code>join_groups.py</code>: он только вступает в группы и раскладывает их по файлам, не отправляя сообщений.</p>
+      <label class="switch">
+        <input type="checkbox" id="schedule-join-enabled">
+        <span>Автоматический запуск вступления по расписанию</span>
+      </label>
+      <div class="row wrap" id="join-times"></div>
+      <div class="row">
+        <input type="time" id="join-time-input">
+        <button id="join-time-add" class="ghost" type="button">Добавить время</button>
+        <button id="join-schedule-save" class="primary" type="button">Сохранить расписание вступления</button>
+        <span class="muted" id="join-schedule-info"></span>
       </div>
     </section>
 
@@ -99,6 +132,17 @@
   </main>
 
   <div id="toast" class="toast" hidden></div>
-  <script src="/panel/app.js"></script>
+
+  <!-- Итог остановки панели: кнопка «Остановить панель» гасит сам процесс,
+       поэтому страница больше ничего не может — сообщаем это и как вернуться. -->
+  <div id="shutdown" class="overlay" hidden>
+    <div class="overlay-card">
+      <h2 id="shutdown-title">Панель останавливается…</h2>
+      <p id="shutdown-text">Останавливаю планировщик и снимаю блокировку бота.</p>
+      <p class="muted">Запустить снова: ./web.sh (Windows: web.bat, macOS: web.command)</p>
+    </div>
+  </div>
+
+  <script src="/panel/app.js?v=__PANEL_VERSION__"></script>
 </body>
 </html>

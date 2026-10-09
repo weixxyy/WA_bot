@@ -3,6 +3,11 @@
 // CSRF-токен встроен в страницу при отдаче: сторонний сайт его не прочитает.
 const CSRF = document.querySelector('meta[name="csrf-token"]').content;
 
+// Версия статики, вместе с которой отдана эта страница. Если сервер отдаёт
+// другую — в браузере остался старый app.js (часть кнопок в нём не работает).
+const PANEL_VERSION =
+  (document.querySelector('meta[name="panel-version"]') || {}).content || "";
+
 /**
  * Обёртка над fetch: JSON-тело, CSRF-заголовок для изменяющих запросов и
  * понятная ошибка из поля detail (его отдаёт FastAPI).
@@ -25,14 +30,29 @@ async function api(path, { method = "GET", body } = {}) {
   }
   if (!response.ok) {
     const detail = data && data.detail ? data.detail : `Ошибка ${response.status}`;
-    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    const error = new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    // Код нужен вызывающим: 409 от «Остановить панель» — это не ошибка, а
+    // «уже останавливается», а 403 — старая страница с чужим CSRF-токеном.
+    error.status = response.status;
+    throw error;
   }
   return data;
 }
 
 let toastTimer = null;
+// Про устаревшую страницу предупреждаем один раз за загрузку, чтобы не спамить.
+let stalePageWarned = false;
+// Опрос состояния и последний его снимок: по нему диалог остановки понимает,
+// идёт ли прогон (панель дождётся его до 15 секунд).
+let statusTimer = null;
+let lastStatus = null;
+// Панель выключается: тосты про ошибки запросов уже не новость.
+let stopping = false;
 
 function toast(message, kind = "ok") {
+  if (stopping) {
+    return;
+  }
   const element = document.getElementById("toast");
   element.textContent = message;
   element.className = `toast ${kind}`;
@@ -47,6 +67,14 @@ function on(id, handler) {
   const element = document.getElementById(id);
   if (element) {
     element.addEventListener("click", handler);
+  }
+}
+
+/** Показывает/прячет элемент по id, не падая, если его нет в этой странице. */
+function setHidden(id, hidden) {
+  const element = document.getElementById(id);
+  if (element) {
+    element.hidden = hidden;
   }
 }
 
@@ -82,7 +110,8 @@ async function refreshStatus() {
 
     if (status.running) {
       const trigger = status.trigger === "scheduled" ? "по расписанию" : "вручную";
-      runChip.textContent = `идёт прогон (${trigger})`;
+      const kind = status.kind === "join" ? "вступление" : "рассылка";
+      runChip.textContent = `идёт ${kind} (${trigger})`;
       runChip.className = "chip busy";
     } else {
       runChip.textContent = "свободен";
@@ -101,9 +130,35 @@ async function refreshStatus() {
       nextChip.className = "chip bad";
     }
 
+    const nextJoinChip = document.getElementById("chip-next-join");
+    if (!status.schedule.join_enabled) {
+      nextJoinChip.textContent = "вступление: выкл";
+      nextJoinChip.className = "chip";
+    } else if (status.next_run_join) {
+      nextJoinChip.textContent = `вступление: ${formatDateTime(status.next_run_join)}`;
+      nextJoinChip.className = "chip ok";
+    } else {
+      nextJoinChip.textContent = "вступление: пусто";
+      nextJoinChip.className = "chip bad";
+    }
+
     const profileChip = document.getElementById("chip-profiles");
     profileChip.textContent = `профилей: ${status.profiles_count}`;
     profileChip.className = "chip";
+
+    // Страница могла остаться от старой версии панели: тогда часть кнопок в ней
+    // просто не обрабатывается — говорим об этом прямо, а не молчим.
+    const stalePage =
+      Boolean(status.panel_version) && status.panel_version !== PANEL_VERSION;
+    setHidden("chip-stale", !stalePage);
+    if (stalePage && !stalePageWarned) {
+      stalePageWarned = true;
+      toast("Страница открыта от старой версии панели — обновите её (Ctrl+Shift+R)", "error");
+    }
+
+    // Правки кода подхватываются только при перезапуске панели.
+    setHidden("chip-code-stale", !status.code_stale);
+    lastStatus = status;
     return status;
   } catch (error) {
     runChip.textContent = "панель недоступна";
@@ -112,18 +167,140 @@ async function refreshStatus() {
   }
 }
 
-async function runNow() {
-  const button = document.getElementById("run-now");
+async function runScript(buttonId, path, okMessage) {
+  const button = document.getElementById(buttonId);
   button.disabled = true;
   try {
-    await api("/api/run", { method: "POST", body: {} });
-    toast("Прогон запущен — смотрите журнал", "ok");
+    // Причину «ничего не произошло» лучше назвать заранее: ответ 409 от панели
+    // объясняет её куда хуже, чем чип с текущим прогоном.
+    const status = await api("/api/status");
+    if (status.running) {
+      const kind = status.kind === "join" ? "вступление" : "рассылка";
+      const trigger = status.trigger === "scheduled" ? "по расписанию" : "вручную";
+      toast(`Уже идёт ${kind} (${trigger}) — дождитесь завершения`, "error");
+      return;
+    }
+    await api(path, { method: "POST", body: {} });
+    toast(okMessage, "ok");
     await refreshStatus();
   } catch (error) {
     toast(error.message, "error");
   } finally {
     button.disabled = false;
   }
+}
+
+function runNow() {
+  return runScript("run-now", "/api/run", "Прогон рассылки запущен — смотрите журнал");
+}
+
+function runJoin() {
+  return runScript(
+    "run-join",
+    "/api/run/join",
+    "Скрипт вступления запущен — смотрите журнал",
+  );
+}
+
+/* ------------------------------------------------------- остановка панели */
+/**
+ * Выключает панель: то же, что Ctrl+C в её окне или ./stop.sh.
+ *
+ * Панель — это и есть процесс бота, поэтому вместе с ней останавливается
+ * планировщик и освобождается блокировка logs/wa_bot.lock. Если в этот момент
+ * идёт прогон, панель дождётся его завершения (до 15 секунд) — об этом честно
+ * сказано в подтверждении.
+ */
+async function stopPanel() {
+  const button = document.getElementById("stop-panel");
+  const running = Boolean(lastStatus && lastStatus.running);
+  const question = running
+    ? "Остановить панель? Идёт прогон — панель дождётся его завершения (до 15 секунд), "
+      + "затем выключится вместе с планировщиком и снимет блокировку бота."
+    : "Остановить панель? Планировщик выключится, блокировка бота снимется. "
+      + "Запустить снова — ./web.sh (Windows: web.bat).";
+  if (!window.confirm(question)) {
+    return;
+  }
+
+  if (button) button.disabled = true;
+  let answer = null;
+  try {
+    answer = await api("/api/stop", { method: "POST", body: {} });
+  } catch (error) {
+    // 409 — панель уже останавливается (нажали в двух вкладках): это не ошибка.
+    // Если панель отвечает на другие запросы, остановка не заказана: 403 значит
+    // старую страницу с чужим CSRF-токеном, остальное — отказ по делу.
+    const alreadyStopping = error.status === 409;
+    const alive = alreadyStopping ? true : Boolean(await refreshStatus());
+    if (!alreadyStopping && alive) {
+      if (button) button.disabled = false;
+      const hint = error.status === 403 ? " Обновите страницу (Ctrl+Shift+R)." : "";
+      toast(`${error.message}.${hint}`, "error");
+      return;
+    }
+  }
+  enterShutdown(answer);
+}
+
+/** Показывает, что панель выключается, и ждёт, когда она перестанет отвечать. */
+function enterShutdown(answer) {
+  stopping = true;
+  clearInterval(statusTimer);
+  statusTimer = null;
+  // Запросы к гасящейся панели смысла не имеют: кнопки больше не работают.
+  document.querySelectorAll("button").forEach((item) => {
+    item.disabled = true;
+  });
+
+  const title = document.getElementById("shutdown-title");
+  const text = document.getElementById("shutdown-text");
+  if (title) title.textContent = "Панель останавливается…";
+  if (text) {
+    text.textContent = answer && answer.running
+      ? "Ждём завершения текущего прогона (до 15 секунд), затем панель остановит "
+        + "планировщик и снимет блокировку бота."
+      : "Останавливаю планировщик и снимаю блокировку бота.";
+  }
+  setHidden("shutdown", false);
+  watchShutdown(0);
+}
+
+/**
+ * Раз в секунду проверяет, жива ли панель: первый сетевой провал означает, что
+ * процесс завершился и блокировка снята. Счётчик секунд показываем затем, чтобы
+ * ожидание прогона не выглядело зависанием.
+ */
+function watchShutdown(attempt) {
+  const title = document.getElementById("shutdown-title");
+  const text = document.getElementById("shutdown-text");
+  setTimeout(async () => {
+    let status = null;
+    try {
+      status = await api("/api/status");
+    } catch (error) {
+      status = null;
+    }
+    if (!status) {
+      if (title) title.textContent = "Панель остановлена";
+      if (text) {
+        text.textContent =
+          "Планировщик выключен, блокировка бота снята — окно можно закрывать.";
+      }
+      return;
+    }
+    if (attempt >= 60) {
+      if (text) {
+        text.textContent =
+          "Панель всё ещё на связи. Завершается длинный прогон? Смотрите журнал; "
+          + "если ждать больше не нужно — ./stop.sh. Если панель уже запускали "
+          + "заново, обновите страницу (Ctrl+Shift+R).";
+      }
+      return;
+    }
+    if (text) text.textContent = `Панель ещё завершается… (${attempt + 1} с)`;
+    watchShutdown(attempt + 1);
+  }, 1000);
 }
 
 /* --------------------------------------------------------------- сообщение */
@@ -189,20 +366,36 @@ async function importUrls() {
   }
 }
 
+/* ---------------------------------------------- отсортированные по типу группы */
+async function loadGroups() {
+  try {
+    const data = await api("/api/groups");
+    document.getElementById("groups-only-admins").value = data.only_admins.join("\n");
+    document.getElementById("groups-closed").value = data.closed.join("\n");
+    document.getElementById("groups-open").value = data.open.join("\n");
+    document.getElementById("groups-info").textContent =
+      `админы: ${data.only_admins.length}, заявки: ${data.closed.length}, остальные: ${data.open.length}`;
+  } catch (error) {
+    toast(`Не удалось загрузить отсортированные ссылки: ${error.message}`, "error");
+  }
+}
+
 /* --------------------------------------------------------------- расписание */
 let scheduleTimes = [];
+let joinScheduleTimes = [];
 
-function renderTimes() {
-  const container = document.getElementById("times");
+/** Рисует чипы времён в контейнере; onRemove вызывается по клику на «×». */
+function renderTimeChips(containerId, times, onRemove) {
+  const container = document.getElementById(containerId);
   container.innerHTML = "";
-  if (!scheduleTimes.length) {
+  if (!times.length) {
     const empty = document.createElement("span");
     empty.className = "time-chip empty";
     empty.textContent = "времени нет";
     container.appendChild(empty);
     return;
   }
-  scheduleTimes.forEach((time) => {
+  times.forEach((time) => {
     const chip = document.createElement("span");
     chip.className = "time-chip";
     const label = document.createElement("span");
@@ -211,12 +404,23 @@ function renderTimes() {
     remove.type = "button";
     remove.textContent = "×";
     remove.title = "Убрать время";
-    remove.addEventListener("click", () => {
-      scheduleTimes = scheduleTimes.filter((value) => value !== time);
-      renderTimes();
-    });
+    remove.addEventListener("click", () => onRemove(time));
     chip.append(label, remove);
     container.appendChild(chip);
+  });
+}
+
+function renderTimes() {
+  renderTimeChips("times", scheduleTimes, (time) => {
+    scheduleTimes = scheduleTimes.filter((value) => value !== time);
+    renderTimes();
+  });
+}
+
+function renderJoinTimes() {
+  renderTimeChips("join-times", joinScheduleTimes, (time) => {
+    joinScheduleTimes = joinScheduleTimes.filter((value) => value !== time);
+    renderJoinTimes();
   });
 }
 
@@ -226,6 +430,12 @@ function scheduleInfoText(data) {
     : "автозапуск не запланирован";
 }
 
+function joinScheduleInfoText(data) {
+  return data.next_run_join
+    ? `следующий запуск вступления: ${formatDateTime(data.next_run_join)}`
+    : "автозапуск вступления не запланирован";
+}
+
 async function loadSchedule() {
   try {
     const data = await api("/api/schedule");
@@ -233,24 +443,37 @@ async function loadSchedule() {
     document.getElementById("schedule-enabled").checked = data.enabled;
     renderTimes();
     document.getElementById("schedule-info").textContent = scheduleInfoText(data);
+
+    joinScheduleTimes = [...(data.join_times || [])];
+    document.getElementById("schedule-join-enabled").checked = data.join_enabled;
+    renderJoinTimes();
+    document.getElementById("join-schedule-info").textContent = joinScheduleInfoText(data);
   } catch (error) {
     toast(`Не удалось загрузить расписание: ${error.message}`, "error");
   }
 }
 
-function addTime() {
-  const input = document.getElementById("time-input");
+function addTimeTo(inputId, times, render) {
+  const input = document.getElementById(inputId);
   const value = input.value;
   if (!value) {
     toast("Сначала выберите время", "error");
     return;
   }
-  if (!scheduleTimes.includes(value)) {
-    scheduleTimes.push(value);
-    scheduleTimes.sort();
-    renderTimes();
+  if (!times.includes(value)) {
+    times.push(value);
+    times.sort();
+    render();
   }
   input.value = "";
+}
+
+function addTime() {
+  addTimeTo("time-input", scheduleTimes, renderTimes);
+}
+
+function addJoinTime() {
+  addTimeTo("join-time-input", joinScheduleTimes, renderJoinTimes);
 }
 
 async function saveSchedule() {
@@ -266,6 +489,25 @@ async function saveSchedule() {
     renderTimes();
     document.getElementById("schedule-info").textContent = scheduleInfoText(data);
     toast("Расписание сохранено", "ok");
+    await refreshStatus();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+async function saveJoinSchedule() {
+  try {
+    const data = await api("/api/schedule/join", {
+      method: "PUT",
+      body: {
+        enabled: document.getElementById("schedule-join-enabled").checked,
+        times: joinScheduleTimes,
+      },
+    });
+    joinScheduleTimes = [...(data.join_times || [])];
+    renderJoinTimes();
+    document.getElementById("join-schedule-info").textContent = joinScheduleInfoText(data);
+    toast("Расписание вступления сохранено", "ok");
     await refreshStatus();
   } catch (error) {
     toast(error.message, "error");
@@ -490,24 +732,46 @@ async function loadHistory() {
 
 /* -------------------------------------------------------------------- запуск */
 async function refreshAll() {
-  await refreshStatus();
-  await Promise.all([loadMessage(), loadUrls(), loadSchedule(), loadProfiles()]);
+  const button = document.getElementById("refresh");
+  if (button) button.disabled = true;
+  try {
+    await refreshStatus();
+    await Promise.all([
+      loadMessage(),
+      loadUrls(),
+      loadGroups(),
+      loadSchedule(),
+      loadProfiles(),
+    ]);
+    // Без явного подтверждения кнопка «Обновить» выглядит неработающей: данные
+    // могли не измениться, и на экране не происходит ровно ничего.
+    toast(`Обновлено в ${new Date().toLocaleTimeString("ru-RU")}`, "ok");
+  } finally {
+    if (button) button.disabled = false;
+  }
 }
 
 function init() {
   initTabs();
   on("refresh", refreshAll);
   on("run-now", runNow);
+  on("run-join", runJoin);
   on("message-save", saveMessage);
   on("urls-save", saveUrls);
   on("import-run", importUrls);
+  on("groups-refresh", loadGroups);
   on("time-add", addTime);
   on("schedule-save", saveSchedule);
+  on("join-time-add", addJoinTime);
+  on("join-schedule-save", saveJoinSchedule);
   on("profile-add", addProfile);
   on("history-refresh", loadHistory);
+  on("stop-panel", stopPanel);
 
   refreshAll();
-  setInterval(refreshStatus, 5000);
+  // Гасится панель или нет — состояние всё равно нужно: опрос выключает
+  // enterShutdown, и по нему видно, что процесс действительно завершился.
+  statusTimer = setInterval(refreshStatus, 5000);
 }
 
 if (document.readyState === "loading") {
